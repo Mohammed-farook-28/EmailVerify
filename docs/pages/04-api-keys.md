@@ -36,15 +36,17 @@ When no API keys exist:
 - **Message**: "Create your first API key to start using the API"
 
 ### API Keys List (When Keys Exist)
-*Expected structure when keys are created:*
-- Table or card list showing all API keys
-- Columns/fields expected:
-  - Key Name
-  - API Key (masked/partially hidden)
-  - Created Date
-  - Expiration Date
-  - Status (Active/Expired)
-  - Actions (Copy, Delete, Regenerate)
+Table with the following columns:
+
+| Column | Description | Example |
+|--------|-------------|---------|
+| Name | User-defined name | Test Key |
+| API Key ID | Masked key ID | 6c92d00c...7eeef803a981 |
+| Status | Active or Expired | Active |
+| Expires At | Expiration date/time | 2027-01-29 16:35 |
+| Created At | Creation date/time | 2026-01-29 16:35 |
+| Last Used | Last usage timestamp | - (if never used) |
+| Actions | Delete button | Delete (opens dialog) |
 
 ---
 
@@ -79,6 +81,15 @@ When no API keys exist:
 | Create | Black, primary | Creates the API key |
 | Cancel | White, secondary | Closes dialog without saving |
 | Close (X) | Icon button | Closes dialog |
+
+### Key Created Dialog (After Creation)
+After clicking Create, the dialog transforms to show the new key:
+
+- **Label**: "Plaintext Key (shown only once)"
+- **Key Display**: Full key value (e.g., `sk_Ue7HpvL9GPaakY3LIn8V4fFzR9C47JIR`)
+- **Copy Button**: Copies key to clipboard
+- **Warning**: "Please save this key securely. You will not be able to view it again after closing this dialog. If lost, please reset the key."
+- **Close Button**: Closes dialog and returns to key list
 
 ---
 
@@ -145,12 +156,12 @@ When no API keys exist:
 
 ---
 
-## API Key Format (Expected)
+## API Key Format (Verified)
 ```
-ev_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+sk_Ue7HpvL9GPaakY3LIn8V4fFzR9C47JIR
 ```
-- Prefix: `ev_live_` (or `ev_test_` for test keys)
-- Key body: 32+ character alphanumeric string
+- Prefix: `sk_`
+- Key body: 32-character alphanumeric string
 
 ---
 
@@ -168,11 +179,16 @@ Authorization: Bearer ev_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ---
 
-## Actions Available (Expected when keys exist)
+## Actions Available (Verified)
 
 | Action | Description |
 |--------|-------------|
-| Copy | Copy API key to clipboard |
-| Delete | Remove API key (requires confirmation) |
-| View Details | See full key information |
-| Regenerate | Generate new key value (invalidates old) |
+| Delete | Remove API key (opens confirmation dialog) |
+
+### Delete API Key Dialog
+- **Title**: "Delete API Key"
+- **Warning**: "This action cannot be undone. Are you sure you want to delete this key?"
+- **Buttons**:
+  - Cancel (secondary)
+  - Delete (destructive/primary)
+  - Close (X icon)

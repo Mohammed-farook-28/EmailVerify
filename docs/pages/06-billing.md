@@ -85,18 +85,18 @@ Dashboard > Billing
 | Popular | 5,000 | $16 | 36% OFF |
 | Starter | 1,000 | $4 | 20% OFF |
 
-#### Yearly Plans
-| Plan | Credits/Year | Price/Month | Price/Year | Discount |
-|------|--------------|-------------|------------|----------|
-| Titan | 12,000,000 | $140 | $1,680 | 97.2% OFF (Best Value) |
-| Mega | 6,000,000 | $80 | $960 | 96.8% OFF |
-| Ultimate | 2,400,000 | $60 | $720 | 94% OFF |
-| Premium | 1,200,000 | $40 | $480 | 92% OFF |
-| Enterprise | 600,000 | $30 | $360 | 88% OFF |
-| Business | 240,000 | $24 | $288 | 76% OFF |
-| Professional | 120,000 | $14 | $168 | 72% OFF |
-| Popular | 60,000 | $8 | $96 | 68% OFF |
-| Starter | 12,000 | $2 | $24 | 60% OFF |
+#### Yearly Plans (Verified)
+| Plan | Credits/Year | Price/Month | Price/Year | Original/Year | Discount |
+|------|--------------|-------------|------------|---------------|----------|
+| Titan | 12,000,000 | $140 | $1,680 | $3,360 | 97.2% OFF (Best Value) |
+| Mega | 6,000,000 | $80 | $960 | $1,920 | 96.8% OFF |
+| Ultimate | 2,400,000 | $60 | $720 | $1,440 | 94% OFF |
+| Premium | 1,200,000 | $40 | $480 | $960 | 92% OFF |
+| Enterprise | 600,000 | $30 | $360 | $720 | 88% OFF |
+| Business | 240,000 | $24 | $288 | $576 | 76% OFF |
+| Professional | 120,000 | $14 | $168 | $336 | 72% OFF |
+| Popular | 60,000 | $8 | $96 | $192 | 68% OFF |
+| Starter | 12,000 | $2 | $24 | $48 | 60% OFF |
 
 ---
 

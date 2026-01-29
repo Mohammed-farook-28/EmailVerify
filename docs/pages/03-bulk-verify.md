@@ -81,6 +81,12 @@ Horizontal tab list with two options:
 - **Action**: Initiates bulk verification process
 - **Position**: Below the tab panels
 
+### View History Link
+- **Label**: "View History"
+- **Link**: /home/history
+- **Position**: Below submit button
+- **Purpose**: Navigate to history page to see past bulk verification jobs
+
 ---
 
 ## Right Column: Progress & Results
@@ -96,10 +102,17 @@ Horizontal tab list with two options:
 - **Percentage**: "0%" (dynamic during processing)
 - **Status Text**: "Ready to start"
 
-#### Status Messages (Expected)
+#### Status Messages (Verified)
 - "Ready to start" - Initial state
-- "Processing..." - During verification
-- "Complete" - When finished
+- "⚡ Processing emails..." - During verification
+- "✅ Batch completed - X emails" - When finished
+
+#### Credits Display (After Completion)
+- "💎 X credits used"
+
+#### Button States
+- Initial: "Start Bulk Verification"
+- Processing: "⏳ Verifying Emails..." (disabled)
 
 ---
 
@@ -114,12 +127,12 @@ Horizontal tab list with two options:
 - **Message**: "Start verification to see results"
 
 #### Results Display (When Complete)
-*Expected fields:*
-- Total emails processed
-- Valid emails count
-- Invalid emails count
-- Unknown emails count
-- Download results option (CSV export)
+- **Pie Chart**: Visual distribution of results
+- **Percentage Display**: "X% Valid" (large)
+- **Breakdown**: "Y% Invalid", "Z% Valid" with counts
+- **Export Button**: "Export Results"
+
+**Note**: Copy & Paste bulk verifications are inline - they don't create records in the History page. Only file uploads create History records.
 
 ---
 

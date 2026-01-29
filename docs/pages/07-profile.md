@@ -137,9 +137,21 @@ Dashboard > Profile
 - Required fields indicated
 
 ### Delete Account Dialog
-- **Type**: Confirmation dialog
-- **Purpose**: Prevent accidental deletion
-- Expected to require additional confirmation (e.g., type account name or password)
+- **Type**: Alert dialog (confirmation)
+- **Title**: "Delete your Account"
+- **Message**: "We must verify your identity to continue with this action. We'll send a verification code to the email address [user@email.com]."
+- **Buttons**:
+  - Cancel (secondary)
+  - Send Verification Code (primary)
+  - Close (X icon)
+
+#### Delete Account Flow
+1. User clicks "Delete your Account" button
+2. Confirmation dialog appears with email verification requirement
+3. User clicks "Send Verification Code"
+4. Verification code sent to user's email
+5. User enters verification code
+6. Account is deleted upon successful verification
 
 ---
 

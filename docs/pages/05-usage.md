@@ -63,12 +63,37 @@ Dashboard > Usage
 - **Action**: "Clear all" button to reset filters
 
 ### 3. Usage History Table
-Displays verification records with the following expected columns:
-- Email address
-- Verification status
-- Method (Web/API)
-- Timestamp
-- Additional details
+
+#### Table Columns
+| Column | Sortable | Description |
+|--------|----------|-------------|
+| Email Address | No | The verified email address |
+| Verification Status | No | Result (Valid, Invalid, Unknown, Risky, Disposable, Catch-all, Role) |
+| Verification Date | Yes | When verification occurred (clickable to sort) |
+| API Key | No | Which API key was used (or "System Default Key" for web) |
+| Verification Type | No | "Single Email" or "Bulk" |
+| Usage Method | No | "Web" or "API" |
+| Credits Cost | No | Number of credits consumed |
+| Actions | - | Menu button with options |
+
+#### Row Actions Menu
+- **Export**: Export this single record
+
+#### Sample Row Data
+```
+| test@gmail.com | Role Email | 2026-01-29 16:12 | System Default Key | Single Email | Web | 1 | [...] |
+```
+
+### 4. Pagination
+- **Record Count**: "Showing X to Y of Z records"
+- **Rows Per Page**: Dropdown (default: 20)
+  - Options: 10, 20, 50, 100
+- **Navigation**:
+  - First page button (disabled when on first page)
+  - Previous page button (disabled when on first page)
+  - Page number buttons
+  - Next page button (disabled when on last page)
+  - Last page button (disabled when on last page)
 
 ---
 
@@ -78,7 +103,7 @@ Displays verification records with the following expected columns:
 - **Title**: "Export Verification History"
 - **Description**: "Choose how many records to export (maximum 100 records)"
 - **Options** (Radio buttons):
-  1. Export current page (X records)
+  1. Export current page (X records) - default selected
   2. Export all data (up to 100 records)
   3. Export custom range
 - **Note**: "Current filter () will be applied"
@@ -86,6 +111,11 @@ Displays verification records with the following expected columns:
   - Cancel
   - Export
   - Close (X)
+
+#### Custom Range Fields (shown when "Export custom range" selected)
+- **Start position**: Spinbutton (default: 1, min: 1)
+- **End position**: Spinbutton (default: 100, max: 100, min: 1)
+- **Helper text**: "Export records from position 1 to 100 (newest first)"
 
 ---
 

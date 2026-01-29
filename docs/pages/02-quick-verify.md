@@ -44,6 +44,7 @@ Two-column layout:
 - **Placeholder**: "Please enter the email address to verify"
 - **Required**: Yes
 - **Validation**: Email format expected
+- **Error State**: Input marked invalid with message "Please enter a valid email address"
 
 #### Submit Button
 - **Label**: "Verify Now"
@@ -71,14 +72,49 @@ Listed below the form with icons:
 - **Message**: "Enter an email on the left to start verification"
 
 ### Results Display (When Verification Complete)
-*Expected fields based on the service description:*
 
-- **Email Address**: The verified email
-- **Validity Status**: Valid/Invalid/Unknown
-- **Risk Level**: Low/Medium/High
-- **Syntax Check**: Pass/Fail
-- **Domain Check**: Pass/Fail
-- **Network Level Detection**: Results
+#### Result Card Header
+- **Email Address**: The verified email (e.g., "test@gmail.com")
+- **Copy Button**: Button to copy email address to clipboard
+- **Tags**: Classification badges displayed in top-right
+  - "Role Email" (gray badge) - for role-based addresses
+  - "Free Email" (pink/red badge) - for free email providers
+  - "Disposable" (badge) - for temporary emails
+  - "Catch-All" (badge) - for catch-all domains
+
+#### Status Section
+- **Format**: "[Status Type] • [Deliverability]"
+- **Status Types** (displayed as tag and in status line):
+  - "Role Email" - role-based addresses (info@, support@, etc.)
+  - "Valid" - verified deliverable address
+  - "Invalid" - undeliverable address
+  - "Unknown Status" - could not be verified
+  - "Risky" - potentially problematic
+  - "Disposable" - temporary email provider
+  - "Catch-All" - catch-all domain
+- **Deliverability Indicators**:
+  - "✓ Deliverable" - can receive email
+  - "Not Deliverable" - cannot receive email
+
+#### Reputation Score
+- **Label**: "Reputation Score"
+- **Value**: Percentage (0-100%)
+- **Progress Bar**: Color-coded
+  - Green: 60-100%
+  - Yellow: 30-59%
+  - Red: 0-29%
+
+#### Technical Verification Details Section
+- **Title**: "Technical Verification Details" (h4)
+- **Fields**:
+  | Field | Example Value | Indicator |
+  |-------|---------------|-----------|
+  | Domain | gmail.com | Text value |
+  | MX Records | Normal | Green checkmark for valid |
+  | SMTP Verification | Not Checked / Valid / Invalid | Status icon |
+
+#### Actions
+- **Export Result**: Button to download/export verification result
 
 ---
 

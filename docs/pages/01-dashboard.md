@@ -28,6 +28,7 @@ Located on the left side with collapsible toggle button.
 2. **Email Verification**
    - Quick Verify (/home/quick-verify)
    - Bulk Verify (/home/bulk-verify)
+   - History (/home/history)
    - API Keys (/home/api-keys)
 
 3. **Billing**
@@ -51,6 +52,9 @@ Shows current location: "Dashboard"
 ## Main Content Sections
 
 ### 1. Daily Login Bonus Banner (Conditional)
+**Status**: Not visible during testing - may be removed or shown only under specific conditions.
+
+*Expected structure (if present):*
 - **Title**: "Daily Login Bonus Available!"
 - **Description**: "Claim your free 100 credits for logging in today"
 - **Actions**:
@@ -81,21 +85,26 @@ Shows current location: "Dashboard"
 - **Action**: "View Details" link → /home/usage?method=api
 
 ### 3. Email Validity Distribution Chart
-- **Type**: Pie/Donut chart (likely)
+- **Type**: Donut chart with center percentage
 - **Title**: "Email Validity Distribution"
+- **Center Display**: "X.X% Valid" (percentage of valid emails)
 - **Empty State**:
   - Message: "No data available"
   - Subtext: "Start verifying emails to see the distribution"
-- **Expected Data Categories** (when populated):
-  - Valid
-  - Invalid
-  - Unknown
+- **Data Categories** (clickable buttons showing percentage and count):
+  - Invalid (e.g., "50.0% Invalid 2")
+  - Valid (e.g., "25.0% Valid 1")
+  - Role (e.g., "25.0% Role 1")
+  - Unknown (e.g., "0.0% Unknown 0")
+  - Risky (e.g., "0.0% Risky 0")
+  - Disposable (e.g., "0.0% Disposable 0")
+  - Catchall (e.g., "0.0% Catchall 0")
 
 ### 4. Verification Trend Chart
 - **Type**: Line chart
 - **Title**: "Verification Trend"
-- **Time Range Selector** (Dropdown):
-  - 7 Days (default)
+- **Time Range Selector** (Dropdown - Verified):
+  - 7 Days (default, selected)
   - 30 Days
   - 90 Days
 - **Action Link**: "Usage History" → /home/usage

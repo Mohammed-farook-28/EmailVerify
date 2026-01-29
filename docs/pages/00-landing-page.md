@@ -28,12 +28,65 @@ The public-facing landing page showcases EmailVerify's email verification servic
 | Product | Dropdown | - | - |
 | Free Tools | Dropdown | - | - |
 | AI Guides | Dropdown | - | - |
-| Pricing | Link | /pricing | "New" |
-| Whitelabel | Link | /whitelabel | "New" |
+| Pricing | Link | /pricing | "New" (red badge) |
+| Whitelabel | Link | /whitelabel | "New" (red badge) |
+
+#### Product Dropdown Contents
+| Item | Link |
+|------|------|
+| Email Verification | /email-verification |
+| Bulk Email Verification | /bulk-email-verification |
+| Email Validation API | /email-validation-api |
+
+#### Free Tools Dropdown Contents
+| Item | Link | Badge |
+|------|------|-------|
+| Email Extractor | /email-extractor | "New" |
+| Email Checker | /email-checker | - |
+| Email List Cleaning | /email-list-cleaning | - |
+| Disposable Email Detection | /disposable-email-detection | - |
+| Bounce Email Checker | /bounce-email-checker | - |
+| Role Account Detection | /role-account-detection | - |
+| Catch-All Verifier | /catch-all-verifier | - |
+
+#### AI Guides Dropdown Contents
+| Item | Link |
+|------|------|
+| MCP Server | /mcp |
+| Agent Skills | /agent-skills |
 
 ### Right Side
-- **Language Selector**: Dropdown (English default)
-- **Profile Menu**: User avatar button (when logged in)
+- **Language Selector**: Dropdown with flag icons (16 languages)
+- **Profile Menu**: User avatar button (circular, shows initial when logged in)
+
+#### Language Options (16 languages)
+| Flag | Language | Code |
+|------|----------|------|
+| 🇺🇸 | English | en |
+| 🇨🇳 | 简体中文 | zh-CN |
+| 🇭🇰 | 繁體中文 | zh-TW |
+| 🇪🇸 | Español | es |
+| 🇯🇵 | 日本語 | ja |
+| 🇫🇷 | Français | fr |
+| 🇩🇪 | Deutsch | de |
+| 🇮🇹 | Italiano | it |
+| 🇵🇱 | Polski | pl |
+| 🇮🇳 | हिंदी | hi |
+| 🇲🇾 | Melayu | ms |
+| 🇵🇹 | Português | pt |
+| 🇮🇩 | Indonesia | id |
+| 🇷🇺 | Русский | ru |
+| 🇰🇷 | 한국어 | ko |
+| 🇳🇱 | Nederlands | nl |
+
+#### Profile Menu (When Logged In)
+| Item | Type | Action |
+|------|------|--------|
+| Signed in as [email] | Label | Display only |
+| Dashboard | Link | /home |
+| Documentation | Link | External docs |
+| Theme | Submenu | Light / Dark / System |
+| Sign out | Button | Logout action |
 
 ---
 
@@ -186,6 +239,30 @@ The public-facing landing page showcases EmailVerify's email verification servic
 
 ---
 
+## Business Scenarios Section
+
+### Title
+"For Every Business Scenario"
+
+### Subtitle
+"Whether you're an e-commerce platform, SaaS company, or marketing agency, EmailVerify meets your needs"
+
+### Scenarios
+
+#### 1. E-commerce Platforms
+- **Icon**: 🛒
+- **Description**: "Improve promotional email deliverability and reduce cart abandonment email bounces"
+
+#### 2. SaaS Companies
+- **Icon**: 💻
+- **Description**: "Verify emails at user registration to improve trial conversion rates and user quality"
+
+#### 3. Marketing Agencies
+- **Icon**: 📊
+- **Description**: "Provide email list cleaning services for clients to improve campaign effectiveness"
+
+---
+
 ## Integrations Section
 
 ### Title
@@ -272,35 +349,81 @@ The public-facing landing page showcases EmailVerify's email verification servic
 ## Footer
 
 ### Brand Section
-- EmailVerify logo
-- "Verify emails in real-time with 99.9% accuracy. Stop bounces, protect your sender reputation, and reach real people. Trusted by 10,000+ businesses worldwide."
+- EmailVerify logo (links to homepage)
+- **Tagline**: "Verify emails in real-time with 99.9% accuracy. Stop bounces, protect your sender reputation, and reach real people. Trusted by 10,000+ businesses worldwide."
+
+### Social Links / Browser Extensions
+| Platform | Link |
+|----------|------|
+| Chrome Extension | https://chromewebstore.google.com/detail/email-extractor-by-emailv/fplaepdipjjpkngejlakmcjkokghhndj |
+| Firefox Extension | https://addons.mozilla.org/en-US/firefox/addon/email-extractor-emailverify-ai/ |
+| GitHub | https://github.com/emailverify-ai |
+| Product Hunt | https://www.producthunt.com/products/emailverify |
+
+### Copyright
+"© Copyright 2026 EmailVerify. All Rights Reserved."
 
 ### Footer Links
 
 #### Product
-- Features
-- Email Verification
-- Bulk Email Verification
-- Email Validation API
+| Item | Link |
+|------|------|
+| Features | /features |
+| Email Verification | /email-verification |
+| Bulk Email Verification | /bulk-email-verification |
+| Email Validation API | /email-validation-api |
+
+#### AI Guides
+| Item | Link |
+|------|------|
+| MCP Server | /mcp |
+| Agent Skills | /agent-skills |
 
 #### Free Tools
-- Free Email Extractor Online
-- Email List Cleaning
-- Free Email Checker
-- Disposable Email Detection
-- Email Bounce Checker
+| Item | Link |
+|------|------|
+| Free Email Extractor Online | /email-extractor |
+| Email List Cleaning | /email-list-cleaning |
+| Free Email Checker | /email-checker |
+| Disposable Email Detection | /disposable-email-detection |
+| Email Bounce Checker | /bounce-email-checker |
+| Catch-All Detector | /catch-all-verifier |
+| Role Account Filter | /role-account-detection |
 
-#### Integrations
-- Mailchimp Integration
-- HubSpot Integration
-- Salesforce Integration
-- SendGrid Integration
+#### Services
+| Item | Link |
+|------|------|
+| Whitelabel Service | /whitelabel |
+| Integrations | /integrations |
+| Mailchimp Integration | /integrations/mailchimp |
+| HubSpot Integration | /integrations/hubspot |
+| Salesforce Integration | /integrations/salesforce |
+| SendGrid Integration | /integrations/sendgrid |
+
+#### Comparisons
+| Item | Link |
+|------|------|
+| Comparisons | /vs |
+| EmailVerify vs NeverBounce | /vs/neverbounce |
+| EmailVerify vs ZeroBounce | /vs/zerobounce |
+| EmailVerify vs Hunter | /vs/hunter |
+| EmailVerify vs Bouncer | /vs/bouncer |
 
 #### Resources
-- Documentation
-- EmailVerify Blog
-- Email Glossary
-- Email Verification FAQs
+| Item | Link |
+|------|------|
+| Documentation | /docs |
+| EmailVerify Blog | /blog |
+| Email Glossary | /glossary |
+| Email Verification FAQs | /faq |
+
+#### Company
+| Item | Link |
+|------|------|
+| About EmailVerify | /about |
+| Privacy Policy | /privacy |
+| Terms of Service | /terms |
+| Cookie Policy | /cookie-policy |
 
 ---
 
