@@ -24,6 +24,10 @@ No build, test, or lint commands exist yet. The repository contains only documen
   - `09-auth-pages.md` — Sign in, sign up, password reset (Google OAuth)
   - `10-api-reference.md` — Full API documentation (endpoints, webhooks, SDKs)
 - `docs/AUDIT-FINDINGS.md` — Verified UI/UX audit with ASCII diagrams and all URLs
+- `docs/figma/` — Figma design specs organized by feature:
+  - `auth/spec.md` — Auth pages design system, colors, typography
+  - `auth/screenshots/` — Sign-in, sign-up, email verification PNGs
+  - `auth/icons/` — Google OAuth icon, input icons (SVGs)
 - `.specify/` — Spec-driven development framework with templates and automation scripts
 - `.specify/memory/constitution.md` — Project constitution with non-negotiable principles
 - `specs/` — Feature specifications (currently has a placeholder for user-auth)
