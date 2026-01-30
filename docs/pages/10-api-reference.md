@@ -20,7 +20,7 @@ All API requests require authentication via Bearer token in the Authorization he
 Authorization: Bearer YOUR_API_KEY
 ```
 
-API keys can be generated from the dashboard at `/home/api-keys`. Keys use the `sk_` prefix format.
+API keys can be generated from the dashboard at `/home/api-keys`. Keys use the `ev_` prefix format.
 
 ---
 
@@ -40,7 +40,7 @@ Verify a single email address.
 **Example Request**
 ```bash
 curl -X POST https://api.emailverify.ai/v1/verify \
-  -H "Authorization: Bearer sk_your_api_key" \
+  -H "Authorization: Bearer ev_your_api_key" \
   -H "Content-Type: application/json" \
   -d '{"email": "test@example.com"}'
 ```
@@ -87,7 +87,7 @@ Submit a batch of emails for verification.
 **Example Request**
 ```bash
 curl -X POST https://api.emailverify.ai/v1/verify/bulk \
-  -H "Authorization: Bearer sk_your_api_key" \
+  -H "Authorization: Bearer ev_your_api_key" \
   -H "Content-Type: application/json" \
   -d '{"emails": ["email1@example.com", "email2@example.com"]}'
 ```
@@ -117,7 +117,7 @@ Check the status of a bulk verification job.
 **Example Request**
 ```bash
 curl https://api.emailverify.ai/v1/verify/bulk/bulk_abc123def456 \
-  -H "Authorization: Bearer sk_your_api_key"
+  -H "Authorization: Bearer ev_your_api_key"
 ```
 
 **Response**
@@ -161,7 +161,7 @@ Download results of a completed bulk verification job.
 **Example Request**
 ```bash
 curl "https://api.emailverify.ai/v1/verify/bulk/bulk_abc123def456/results?format=json" \
-  -H "Authorization: Bearer sk_your_api_key"
+  -H "Authorization: Bearer ev_your_api_key"
 ```
 
 **Response**
@@ -195,7 +195,7 @@ Check current credit balance.
 **Example Request**
 ```bash
 curl https://api.emailverify.ai/v1/credits \
-  -H "Authorization: Bearer sk_your_api_key"
+  -H "Authorization: Bearer ev_your_api_key"
 ```
 
 **Response**
@@ -236,7 +236,7 @@ Create a new webhook endpoint.
 **Example Request**
 ```bash
 curl -X POST https://api.emailverify.ai/v1/webhooks \
-  -H "Authorization: Bearer sk_your_api_key" \
+  -H "Authorization: Bearer ev_your_api_key" \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://your-app.com/webhook",

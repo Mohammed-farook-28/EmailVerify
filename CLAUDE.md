@@ -2,35 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Interaction Rules
+
+1. **Ask, Don't Assume** — Use AskUserQuestion tool for ANY confusion, doubt, decision point, or need for clarity. Never guess. Never assume. Always ask first.
+
+2. **Think Simple** — Don't overcomplicate. Don't oversimplify. Find the honest middle ground. Be reliable and responsible in every recommendation.
+
+3. **No AI Co-Author Tags** — When committing to git, do NOT include "Co-Authored-By: Claude" or any Anthropic attribution in commit messages.
+
+4. **Maximize AskUserQuestion Usage** — Use the AskUserQuestion tool proactively and liberally, not just when blocked. Ask to confirm direction, validate assumptions, and clarify ambiguity before proceeding.
+
 ## Project Overview
 
-EmailVerify is a multi-tenant email verification SaaS platform. It proxies a **single upstream API key** to 1000+ users, managing fair queuing, credit accounting, and resilience. The project is currently in the **specification phase** — architecture and UI specs are complete, but no source code has been written yet.
+EmailVerify is a multi-tenant email verification SaaS platform. It proxies a **single upstream API key** to 1000+ users, managing fair queuing, credit accounting, and resilience. This is based on an existing EmailVerify platform but is **not a 1:1 replica** — modifications and improvements may be made.
 
-## Project Status
+**Current status**: Specification phase only. Architecture and UI specs are complete. No source code, build system, tests, or lint configuration exists yet.
 
-No build, test, or lint commands exist yet. The repository contains only documentation and specifications:
+## Repository Layout
 
-- `docs/architecture.md` — Full system architecture (5-layer defense pattern, database schema, API design, scaling projections)
-- `docs/pages/*.md` — UI page specifications (11 files):
-  - `00-landing-page.md` — Public landing page, nav dropdowns, footer, 16 languages
-  - `01-dashboard.md` — Stats cards, charts, sidebar navigation
-  - `02-quick-verify.md` — Single email verification form and results
-  - `03-bulk-verify.md` — File upload and copy/paste bulk verification
-  - `04-api-keys.md` — API key management (format: `sk_` prefix)
-  - `05-usage.md` — Verification history with filters and export
-  - `06-billing.md` — One-time purchase and subscription plans (Stripe)
-  - `07-profile.md` — User settings, language, password, delete account
-  - `08-history.md` — Bulk job history (file uploads only)
-  - `09-auth-pages.md` — Sign in, sign up, password reset (Google OAuth)
-  - `10-api-reference.md` — Full API documentation (endpoints, webhooks, SDKs)
-- `docs/AUDIT-FINDINGS.md` — Verified UI/UX audit with ASCII diagrams and all URLs
-- `docs/figma/` — Figma design specs organized by feature:
-  - `auth/spec.md` — Auth pages design system, colors, typography
-  - `auth/screenshots/` — Sign-in, sign-up, email verification PNGs
-  - `auth/icons/` — Google OAuth icon, input icons (SVGs)
-- `.specify/` — Spec-driven development framework with templates and automation scripts
-- `.specify/memory/constitution.md` — Project constitution with non-negotiable principles
-- `specs/` — Feature specifications (currently has a placeholder for user-auth)
+- `docs/architecture.md` — Full system architecture (5-layer defense, DB schema, API design, scaling)
+- `docs/pages/*.md` — 11 UI page specifications (landing, dashboard, quick-verify, bulk-verify, api-keys, usage, billing, profile, history, auth, api-reference)
+- `docs/AUDIT-FINDINGS.md` — UI/UX audit with ASCII diagrams
+- `docs/figma/` — Figma design specs (60 pages across 8 sections, each with `spec.md` and `screenshots/`). Start from `docs/figma/index.md`
+- `specs/` — Feature specifications (currently only `001-user-auth/spec.md` placeholder)
+- `.specify/` — Spec-driven development framework (templates in `.specify/templates/`, helper scripts in `.specify/scripts/bash/`)
+- `.specify/memory/constitution.md` — Project constitution template (not yet filled in — principles listed in this file under "Constitution" are from `docs/architecture.md`)
+- `_bmad/` — BMAD product management/development methodology framework (gitignored)
 
 ## Planned Technology Stack
 
@@ -60,27 +57,17 @@ All requests flow through these layers in order:
 
 **Credit System**: Dual-layer — Redis for speed (atomic Lua check-and-deduct), PostgreSQL for durability (credit_events ledger). Reconciliation job runs every 5 minutes.
 
-## Constitution (Non-Negotiable Principles)
-
-Before implementing any feature, check `.specify/memory/constitution.md`. Key constraints:
-
-- **Accuracy**: 99.9% verification accuracy, false positive < 0.05%, false negative < 0.1%
-- **Performance**: Single verify < 50ms (p95), bulk 1,000+/min, 99.99% uptime, page load < 2s, DB queries < 100ms (p95)
-- **Security**: API keys hashed at rest, TLS 1.2+, PII not stored beyond transaction, rate limiting per key
-- **UX**: 16 languages, actionable error messages, credit cost shown before actions, confirm destructive actions, progress for ops > 1s
-- **API-First**: All web features available via API, versioned URLs (`/v1/`), breaking changes keep prior version 12 months
-
 ## Spec-Driven Development Workflow
 
-The `.specify/` framework defines the development process:
+Features are developed through the `.specify/` framework:
 
 1. **Phase 0** (Research): Create git branch `###-feature`
-2. **Phase 1** (Design): Write plan.md, data-model.md, contracts using templates in `.specify/templates/`
-3. **Phase 2** (Implementation): Break down into tasks using tasks-template.md
+2. **Phase 1** (Design): Write spec.md, plan.md, data-model.md using templates in `.specify/templates/`
+3. **Phase 2** (Task breakdown): Generate tasks.md, run consistency analysis
 4. **Phase 3+**: Implement user stories by priority (P1, P2, P3)
 
 Helper scripts in `.specify/scripts/bash/`:
-- `check-prerequisites.sh` — Validate prerequisites
+- `check-prerequisites.sh` — Validate prerequisites and locate feature directory (used by all slash commands)
 - `setup-plan.sh` — Create implementation plan from template
 - `create-new-feature.sh` — Generate feature directory structure
 - `update-agent-context.sh` — Update context for agents

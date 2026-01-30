@@ -1,6 +1,6 @@
 # EmailVerify Platform Architecture
 
-**Version**: 1.0.0 | **Date**: 2026-01-27
+**Version**: 2.0.0 | **Date**: 2026-01-30
 **Context**: Multi-tenant email verification SaaS proxying a single upstream API key to 1000+ users
 
 ---
@@ -151,7 +151,7 @@ await queue.setGroupRateLimit('tenant-premium-abc', 100, 1000); // 100/sec
 **Configuration**:
 - Start with **10 worker processes**
 - Each worker handles **50 concurrent jobs** = 500 max concurrent upstream calls
-- Workers run as separate Node.js processes (PM2 cluster or Kubernetes pods)
+- Workers run as separate Node.js processes (Kubernetes pods on DOKS)
 
 **Global Token Bucket** (controls upstream API call rate):
 ```
@@ -239,15 +239,12 @@ const upstreamPool = {
   keepAliveMaxTimeout: 600000, // 10 min max
 };
 ```
-
- if put cluade it shou;d show but not orking 
-L**Timeouts**:
+**Timeouts**:
 - Connect timeout: **3 seconds** (fail fast if upstream unreachable)
 - Read timeout: **10 seconds** (kill slow requests)
 - Total timeout: **15 seconds** (absolute max per verification)
 
- if put cluade it shou;d show but not orking 
-L**Idempotency**: Every verification request includes a unique idempotency key:
+**Idempotency**: Every verification request includes a unique idempotency key:
 ```
 Key format: {tenantId}:{emailHash}:{timestamp}
 ```
@@ -390,26 +387,37 @@ Client                Gateway              Redis           BullMQ          Worke
 
 | Component | Technology | Justification |
 |-----------|-----------|---------------|
-| **API Server** | Node.js + TypeScript + Express/Fastify | Matches frontend stack (Next.js); async I/O ideal for proxy workload |
-| **Job Queue** | BullMQ Pro | Multi-tenant groups, per-group rate limiting, TypeScript-native, battle-tested |
-| **Queue Storage** | Redis 7+ (dedicated instance) | Required by BullMQ; AOF persistence; sub-ms latency |
+| **Language** | TypeScript (full stack) | Type safety across frontend and backend; shared Zod schemas |
+| **API Server** | Node.js + Express | Battle-tested, massive ecosystem, familiar patterns |
+| **Frontend** | Next.js (App Router) + React | Server Components for data-heavy dashboard; streaming SSR |
+| **UI Framework** | Tailwind CSS + shadcn/ui | Full control over dark theme styling; copy-paste components; no vendor lock-in |
+| **Charts** | Recharts | React-native, declarative, supports donut/line/bar charts for dashboard |
+| **State Management** | TanStack Query | Server state caching, background refetch, optimistic updates for dashboard data |
+| **Forms** | React Hook Form + Zod | Performant uncontrolled forms; Zod schemas shared with backend validation |
+| **ORM** | Drizzle ORM | SQL-like TypeScript ORM; lightweight; stays close to SQL for credit system atomics |
+| **Primary Database** | PostgreSQL 16+ (DO Managed) | ACID for credits, advisory locks, JSONB; managed backups and failover |
+| **Job Queue** | BullMQ Pro | Multi-tenant groups, per-group rate limiting, TypeScript-native |
+| **Queue/Cache** | Redis 7+ (DO Managed) + ioredis | Required by BullMQ; atomic Lua scripts for credits/rate-limiting; single client library |
 | **Rate Limiting** | Redis Lua scripts (sliding window) | Atomic, distributed, sub-ms; no race conditions |
-| **Circuit Breaker** | `opossum` (Node.js) | Lightweight, promise-based, fits Node.js event loop |
-| **HTTP Client** | `undici` | Connection pooling, fastest Node.js HTTP client |
-| **Primary Database** | PostgreSQL 16+ | ACID for credits, advisory locks, JSONB for flexible schemas |
-| **Credit Cache** | Redis (same or separate instance) | Atomic DECRBY for real-time credit checks |
-| **Auth** | Google OAuth 2.0 + session cookies | Matches current EmailVerify auth flow |
-| **Frontend** | Next.js (from Bolt) | SSR, API routes, matches existing UI |
-| **Real-Time Updates** | Server-Sent Events (SSE) | Simpler than WebSockets; auto-reconnect; sufficient for progress updates |
-| **Webhooks** | Custom webhook service | Notify tenant servers of bulk job completion |
+| **Circuit Breaker** | `opossum` | Lightweight, promise-based, fits Node.js event loop |
+| **HTTP Client** | `undici` | Connection pooling, fastest Node.js HTTP client for upstream proxy |
+| **Auth** | Google OAuth 2.0 + email/password | Both methods; server-side PostgreSQL sessions; httpOnly cookies |
+| **Payments** | Stripe | One-time purchases + recurring subscriptions; webhooks for lifecycle |
+| **Email** | Resend | Transactional emails (verification, password reset, alerts); React Email templates |
+| **Real-Time** | Server-Sent Events (SSE) | Simpler than WebSockets; auto-reconnect; Last-Event-ID for resumption |
+| **File Storage** | DigitalOcean Spaces | S3-compatible; bulk result CSVs; pre-signed URLs; 14-day retention |
+| **Webhooks** | Custom webhook service | HMAC-SHA256 signed; 4 event types; 4-attempt retry with backoff |
+| **Testing** | Vitest | Fast, Vite-powered; Jest-compatible API; native ESM + TypeScript |
+| **Edge/CDN** | Cloudflare | DDoS protection, WAF, bot management, CDN for static assets |
 | **Monitoring** | Prometheus + Grafana | Queue depth, error rates, credit balances, upstream latency |
-| **Deployment** | Docker + Kubernetes (or PM2 for simpler setup) | Horizontal scaling of workers; health checks; rolling deploys |
+| **Deployment** | DigitalOcean Kubernetes (DOKS) | Horizontal worker scaling, rolling deploys, health checks |
+| **Package Manager** | npm | Default, zero setup |
 
 ### Infrastructure Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Kubernetes Cluster / PM2 Process Manager               │
+│  DigitalOcean Kubernetes (DOKS) Cluster                  │
 │                                                         │
 │  ┌─────────────┐  ┌─────────────┐  ┌────────────────┐  │
 │  │ API Gateway  │  │ API Gateway  │  │ API Gateway    │  │
@@ -460,7 +468,370 @@ Client                Gateway              Redis           BullMQ          Worke
 
 ---
 
-## 7. Database Schema (Core Tables)
+## 7. Authentication & Session Management
+
+### Authentication Methods
+
+The platform supports two authentication methods:
+
+1. **Google OAuth 2.0** (Authorization Code Flow)
+2. **Email/Password** (with mandatory email verification)
+
+Google OAuth users have `email_verified` set to `true` automatically (Google guarantees verified emails). Email/password users must verify via a one-time code sent to their email before accessing the dashboard.
+
+### Google OAuth Flow
+```
+1. User clicks "Sign in with Google"
+2. Redirect to Google authorization endpoint with scopes: openid, email, profile
+3. Google redirects back to /auth/callback/google with authorization code
+4. Server exchanges code for tokens (access_token + id_token)
+5. Extract email, name, avatar from id_token
+6. Find or create user by google_id
+7. Create session → set cookie → redirect to /home
+```
+
+**Account Linking**: If a user signs up with email/password and later signs in with Google using the same email, the accounts are linked (google_id is populated on the existing user record).
+
+### Email/Password Flow
+```
+1. User submits email + password on /auth/sign-up
+2. Validate email format, password strength (min 8 chars)
+3. Hash password with bcrypt (cost factor 12)
+4. Create user with email_verified = false
+5. Send verification email with 6-digit code (expires in 15 minutes)
+6. User enters code on /auth/verify-email
+7. Set email_verified = true → create session → redirect to /home
+```
+
+**Password Reset**: User requests reset → receive email with 6-digit code (15 min expiry) → enter code + new password → password updated, all existing sessions invalidated.
+
+### Session Management
+
+**Strategy**: Server-side sessions stored in PostgreSQL.
+
+**Session Token**:
+- 256-bit cryptographically random value (32 bytes, base64url encoded)
+- Stored as SHA-256 hash in `sessions.token_hash` (never store plaintext)
+- Delivered via `httpOnly`, `Secure`, `SameSite=Strict` cookie
+- Cookie name: `ev_session`
+
+**Session Lifecycle**:
+```
+Creation:    On successful login (OAuth or email/password)
+Expiry:      30 days from creation
+Rotation:    New token generated on sensitive actions (password change, email change)
+Revocation:  DELETE FROM sessions WHERE user_id = X (instant, all devices)
+Cleanup:     Cron job deletes expired sessions every hour
+Multi-device: Multiple concurrent sessions allowed (one per device/browser)
+```
+
+**Sensitive Action Re-authentication**: Password changes, email changes, account deletion, and API key creation require re-entering the current password (or re-authenticating via Google OAuth) within the last 10 minutes.
+
+### CSRF Protection
+
+All state-changing requests from the web dashboard include a CSRF token. The token is generated per-session, stored server-side, and validated on every POST/PUT/DELETE request. API key-authenticated requests (public API) are exempt since they use Bearer tokens, not cookies.
+
+---
+
+## 8. Webhook System
+
+### Event Types
+
+| Event | Trigger | Payload Contains |
+|-------|---------|-----------------|
+| `verification.completed` | Single email verification finishes | email, status, risk_score, details |
+| `bulk.completed` | All emails in a bulk job are processed | job_id, total_emails, results_summary, download_url |
+| `bulk.failed` | Bulk job fails permanently | job_id, error_reason, processed_count, refunded_credits |
+| `credits.low` | Credit balance drops below 10% of last purchase | current_balance, threshold, user_id |
+
+### Payload Format
+
+```json
+{
+  "id": "evt_a1b2c3d4e5f6",
+  "type": "bulk.completed",
+  "created_at": "2026-01-30T12:00:00Z",
+  "data": {
+    "job_id": "bulk-xyz-123",
+    "total_emails": 50000,
+    "results": {
+      "valid": 42000,
+      "invalid": 5000,
+      "unknown": 2000,
+      "risky": 1000
+    },
+    "download_url": "/api/v1/bulk/bulk-xyz-123/results"
+  }
+}
+```
+
+### Security (HMAC-SHA256 Signing)
+
+Every webhook delivery includes two headers for verification:
+
+```
+X-EV-Signature-256: sha256=<HMAC-SHA256 hex digest>
+X-EV-Timestamp: <Unix timestamp of delivery attempt>
+```
+
+**Signing Process**:
+1. Generate per-webhook signing secret on creation (`whsec_` + 32 random bytes, base64url)
+2. Construct signed payload: `${timestamp}.${raw_json_body}`
+3. Compute HMAC-SHA256 of signed payload using the webhook secret
+4. Include hex digest in `X-EV-Signature-256` header
+
+**Recipient Verification**:
+1. Extract timestamp and signature from headers
+2. Reject if timestamp is older than 5 minutes (replay protection)
+3. Compute HMAC-SHA256 of `${timestamp}.${raw_body}` using their copy of the secret
+4. Compare computed signature with received signature (constant-time comparison)
+
+### Retry Policy
+
+```
+Attempt 1: Immediate
+Attempt 2: 1 minute after failure
+Attempt 3: 5 minutes after failure
+Attempt 4: 30 minutes after failure (final)
+```
+
+- **Timeout**: 10 seconds per delivery attempt
+- **Success**: Any HTTP 2xx response
+- **Failure**: Non-2xx response, timeout, or connection error
+- **After 4 failures**: Webhook marked as `failing`. User notified via email. Webhook paused until user re-enables from dashboard.
+- **Logging**: All delivery attempts logged with status code, latency, and error details
+
+### Webhook Database Schema
+
+```sql
+CREATE TABLE webhooks (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    url             TEXT NOT NULL,
+    secret_hash     VARCHAR(255) NOT NULL,     -- bcrypt hash of whsec_ secret
+    events          TEXT[] NOT NULL,            -- array of subscribed event types
+    status          VARCHAR(20) DEFAULT 'active', -- 'active', 'failing', 'paused'
+    failure_count   INTEGER DEFAULT 0,
+    last_delivery   TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE webhook_deliveries (
+    id              BIGSERIAL PRIMARY KEY,
+    webhook_id      UUID NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+    event_type      VARCHAR(50) NOT NULL,
+    payload         JSONB NOT NULL,
+    status_code     SMALLINT,
+    response_time   INTEGER,                   -- ms
+    attempt         SMALLINT NOT NULL,
+    error           TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id, created_at);
+```
+
+---
+
+## 9. Server-Sent Events (SSE)
+
+### Purpose
+
+SSE provides real-time progress updates for bulk verification jobs to the web dashboard. Users open an SSE connection after submitting a bulk job and receive progress events until completion.
+
+### Connection
+
+```
+GET /home/bulk-verify/:jobId/stream
+Accept: text/event-stream
+Cookie: ev_session=<session_token>
+```
+
+Connection is authenticated via session cookie (same as all internal API endpoints).
+
+### Event Types
+
+**progress** — Emitted every 1% or every 5 seconds (whichever comes first):
+```
+id: 1706616000-42
+event: progress
+data: {"job_id":"bulk-xyz","processed":21000,"total":50000,"percent":42,"rate":850,"eta_seconds":34}
+```
+
+**status_change** — Emitted when job status transitions:
+```
+id: 1706616120-status
+event: status_change
+data: {"job_id":"bulk-xyz","previous":"processing","current":"completed","completed_at":"2026-01-30T12:02:00Z"}
+```
+
+**error** — Emitted on recoverable errors (job continues):
+```
+id: 1706616060-err
+event: error
+data: {"job_id":"bulk-xyz","message":"Upstream API temporarily unavailable, retrying...","severity":"warning"}
+```
+
+**results_summary** — Emitted once on completion:
+```
+id: 1706616120-results
+event: results_summary
+data: {"job_id":"bulk-xyz","valid":42000,"invalid":5000,"unknown":2000,"risky":1000,"download_url":"/api/v1/bulk/bulk-xyz/results"}
+```
+
+### Reconnection
+
+- Every event includes an `id` field (format: `{unix_timestamp}-{sequence}`)
+- On reconnect, the browser sends `Last-Event-ID` header automatically
+- Server resumes from the last acknowledged event, replaying any missed events
+- If the job completed while disconnected, server sends `results_summary` immediately
+- **Reconnection interval**: Client default (browser handles), server sends `retry: 3000` (3 seconds) on initial connection
+
+### Server-Side Implementation
+
+- One SSE connection per bulk job per user (deduplicated by job_id + user_id)
+- Connection timeout: 30 minutes (bulk jobs exceeding this will require reconnection)
+- Heartbeat: Server sends a comment line (`: heartbeat`) every 15 seconds to keep the connection alive and detect dead clients
+- Backpressure: If the client can't keep up, events are buffered up to 100. Beyond that, oldest progress events are dropped (status_change and results_summary are never dropped)
+
+---
+
+## 10. Stripe Integration
+
+### Payment Models
+
+The platform supports two Stripe payment flows:
+
+1. **One-Time Credit Purchases** — via Stripe Checkout Sessions (payment mode)
+2. **Recurring Subscriptions** — via Stripe Checkout Sessions (subscription mode) with monthly/yearly billing
+
+### One-Time Purchase Flow
+```
+1. User selects credit package (1K-1M) on /home/billing
+2. POST /home/billing/checkout { type: "one_time", package: "10k" }
+3. Server creates Stripe Checkout Session (mode: "payment")
+4. Redirect user to Stripe hosted checkout page
+5. On success: Stripe sends checkout.session.completed webhook
+6. Server verifies webhook signature (Stripe signing secret)
+7. Credit user's balance atomically:
+   - Redis INCRBY for immediate availability
+   - PostgreSQL INSERT credit_event (type: 'purchase')
+8. Redirect user back to /home/billing?success=true
+```
+
+### Subscription Flow
+```
+1. User selects plan + billing cycle on /home/billing
+2. POST /home/billing/checkout { type: "subscription", plan: "professional", cycle: "yearly" }
+3. Server creates Stripe Checkout Session (mode: "subscription")
+4. Redirect user to Stripe hosted checkout page
+5. On success: Stripe sends checkout.session.completed + invoice.paid webhooks
+6. Server creates/updates subscription record
+7. Credit user's balance with plan's monthly/yearly allocation
+8. Redirect user back to /home/billing?success=true
+```
+
+### Subscription Lifecycle Events (Stripe Webhooks)
+
+| Stripe Event | Server Action |
+|-------------|--------------|
+| `checkout.session.completed` | Create subscription record, credit initial balance |
+| `invoice.paid` | Renew credits for next period, update current_period_start/end |
+| `invoice.payment_failed` | Mark subscription as `past_due`, notify user via email |
+| `customer.subscription.updated` | Handle plan changes (upgrade/downgrade) |
+| `customer.subscription.deleted` | Mark subscription as `cancelled`, credits remain until period_end |
+
+### Cancellation Policy
+
+- User cancels from dashboard → Stripe subscription set to `cancel_at_period_end`
+- Credits remain usable until `current_period_end`
+- After period ends: subscription status → `expired`, no new credits allocated
+- User can reactivate before period ends (Stripe reactivation)
+
+### Plan Changes (Upgrade/Downgrade)
+
+- **Upgrade**: Applied immediately. Stripe prorates the charge. Difference in credits added instantly.
+- **Downgrade**: Applied at next billing cycle. Current period credits unchanged.
+
+### Stripe Configuration
+
+```
+Webhook endpoint:      POST /home/billing/webhook
+Webhook signing secret: whsec_xxxxx (stored in environment variable)
+Idempotency:           Stripe event ID used as idempotency_key in credit_events
+Customer mapping:      Stripe customer ID stored on users table (stripe_customer_id)
+```
+
+### Credit Expiry
+
+- **One-time purchases**: Credits never expire
+- **Subscription credits**: Expire at `current_period_end` if unused (configurable)
+- **Rollover**: No rollover of unused subscription credits between periods
+
+---
+
+## 11. CSV Export & File Storage
+
+### Storage: DigitalOcean Spaces
+
+Bulk verification results are stored in DigitalOcean Spaces (S3-compatible object storage) for download.
+
+**Bucket structure**:
+```
+ev-results/
+  {user_id}/
+    {job_id}/
+      results.csv          -- full results
+      results-valid.csv    -- filtered: valid only
+      results-invalid.csv  -- filtered: invalid only
+```
+
+### Export Generation Flow
+```
+1. Bulk job completes (all batches processed)
+2. Worker aggregates results from verification_results table
+3. Generate CSV(s) in memory using streaming writes (not buffered)
+4. Upload to DO Spaces via S3-compatible SDK
+5. Store signed URL in bulk_jobs.results_url
+6. Notify user via SSE (results_summary event) + webhook (bulk.completed)
+```
+
+### Download Flow
+```
+1. User clicks "Download Results" on dashboard or API: GET /api/v1/bulk/:jobId/results
+2. Server generates a pre-signed DO Spaces URL (valid for 1 hour)
+3. Redirect user to pre-signed URL (302)
+4. DigitalOcean serves the file directly — no server memory/bandwidth used
+```
+
+### CSV Format
+
+```csv
+email,status,deliverable,risk_score,reason,mx_records,smtp_provider,is_free,is_role,is_disposable,is_catchall,verified_at
+test@example.com,valid,true,92,accepted_email,"mx1.example.com,mx2.example.com",Google,false,false,false,false,2026-01-30T12:00:00Z
+```
+
+### Compression
+
+- Files > 10MB are gzip-compressed before upload (`.csv.gz`)
+- Content-Encoding header set so browsers auto-decompress on download
+
+### Retention Policy
+
+- **14-day retention**: DO Spaces lifecycle rule auto-deletes objects after 14 days
+- `bulk_jobs.results_url` set to NULL after expiry (cleanup cron job)
+- Users see "Results expired" message on dashboard for jobs older than 14 days
+- **No re-generation**: Once expired, results cannot be recovered (verification_results rows may have been pruned)
+
+### Verification Results Pruning
+
+- Individual `verification_results` rows for bulk jobs are retained for 30 days (for usage history/audit)
+- After 30 days: bulk job results rows are pruned, only the `bulk_jobs` summary record remains
+- Single verification results are retained for 90 days
+
+---
+
+## 12. Database Schema (Core Tables)
 
 ### Users & Authentication
 
@@ -472,6 +843,8 @@ CREATE TABLE users (
     avatar_url      TEXT,
     google_id       VARCHAR(255) UNIQUE,
     password_hash   VARCHAR(255),          -- optional (for email/password login)
+    email_verified  BOOLEAN DEFAULT FALSE, -- must verify email before dashboard access
+    stripe_customer_id VARCHAR(255) UNIQUE, -- Stripe customer ID for billing
     language        VARCHAR(10) DEFAULT 'en',
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
@@ -493,7 +866,7 @@ CREATE TABLE api_keys (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name            VARCHAR(255) NOT NULL,
-    key_prefix      VARCHAR(20) NOT NULL,  -- 'ev_live_' first 8 chars for display
+    key_prefix      VARCHAR(20) NOT NULL,  -- 'ev_' first 3 chars for display
     key_hash        VARCHAR(255) NOT NULL,  -- bcrypt hash of full key
     expires_at      TIMESTAMPTZ,
     last_used_at    TIMESTAMPTZ,
@@ -559,12 +932,12 @@ CREATE TABLE bulk_jobs (
 
 ---
 
-## 8. API Design
+## 13. API Design
 
 ### Public API (for user API keys)
 
 ```
-Authentication: Bearer ev_live_xxxxxxxx (API key in Authorization header)
+Authentication: Bearer ev_xxxxxxxx (API key in Authorization header)
 
 POST   /api/v1/verify              Single email verification
 POST   /api/v1/bulk                Bulk verification (upload CSV or JSON array)
@@ -609,7 +982,94 @@ DELETE /home/profile               Delete account
 
 ---
 
-## 9. Monitoring & Observability
+## 14. Security
+
+### Encryption
+
+**In Transit**: All traffic served over TLS 1.2+ (enforced by Cloudflare and DigitalOcean load balancers). HTTP → HTTPS redirect at the edge. HSTS header with 1-year max-age.
+
+**At Rest**: DigitalOcean Managed Database encryption at rest (AES-256). No additional application-level field encryption. API keys are stored as bcrypt hashes (cost factor 12) — not encrypted, hashed. Passwords are bcrypt-hashed (cost factor 12).
+
+### DDoS & Edge Protection
+
+**Cloudflare Proxy**: All traffic routes through Cloudflare for:
+- DDoS mitigation (L3/L4/L7)
+- Web Application Firewall (WAF) with OWASP Core Ruleset
+- Bot management (challenge suspicious automated traffic)
+- CDN for static frontend assets (Next.js)
+- Rate limiting at the edge (first line of defense before our application rate limits)
+
+**Origin Protection**: Origin server IP is never exposed. Cloudflare DNS proxy (orange cloud) on all records. DigitalOcean firewall allows inbound HTTP/HTTPS only from Cloudflare IP ranges.
+
+### API Key Security
+
+- **Format**: `ev_` prefix + 32 cryptographically random bytes (base64url encoded)
+- **Storage**: Only the bcrypt hash is stored in PostgreSQL. Plaintext key shown once at creation, never retrievable again.
+- **Transport**: Bearer token in `Authorization` header over TLS only
+- **Rotation**: Users create a new key and delete the old one. No in-place rotation.
+- **Expiration**: Configurable at creation (1 month, 3 months, 6 months, 1 year, never). Expired keys return 401.
+- **Revocation**: DELETE API key → immediate invalidation. API key cache (if any) invalidated within 30 seconds.
+- **Display**: Only the prefix + first 8 characters shown in the dashboard (e.g., `ev_Ue7HpvL9...`)
+
+### Input Validation
+
+All user input is validated at the API gateway before reaching business logic:
+
+- **Email format**: RFC 5322 compliant validation (library-based, not regex)
+- **File uploads**: Max 10MB for CSV files. Content-type verified. CSV parsed and validated before processing.
+- **Bulk limits**: Maximum 100,000 emails per bulk job
+- **String inputs**: Max length enforced on all text fields. No raw SQL or HTML injection possible (parameterized queries + React auto-escaping).
+- **API request body**: JSON schema validation with strict mode (reject unknown fields)
+
+### Rate Limiting Evasion Prevention
+
+- Per-user rate limits are enforced by authenticated user ID, not by IP address — prevents circumvention via IP rotation
+- API key rate limits tied to the key's associated user tier
+- Unauthenticated endpoints (auth, landing page) are rate limited by IP + fingerprint
+- Progressive penalties: After 10 consecutive rate limit hits, the cooldown period doubles
+
+### GDPR & Account Deletion
+
+**Deletion model**: Soft delete with anonymization.
+
+```
+1. User requests account deletion from /home/profile
+2. Re-authentication required (password or Google OAuth within last 10 minutes)
+3. Email verification code sent to confirm intent
+4. 30-day grace period begins (user can cancel deletion by logging in)
+5. After 30 days, anonymization job runs:
+   - users: email → 'deleted_{uuid}@anonymized.local', name → NULL, avatar_url → NULL, google_id → NULL, password_hash → NULL
+   - verification_results: email_checked → SHA-256 hash (non-reversible)
+   - api_keys: deleted (CASCADE)
+   - sessions: deleted (CASCADE)
+   - webhooks: deleted (CASCADE)
+   - credit_events: user_id retained for financial audit (anonymized user record)
+   - subscriptions: stripe_sub_id retained for billing records
+   - bulk_jobs: results files deleted from DO Spaces
+6. User record marked with deleted_at timestamp, email_verified = false
+7. Anonymized user record retained indefinitely for financial audit compliance
+```
+
+**Data Export**: Users can request a full data export (GDPR Article 20 — Right to Data Portability) from the profile page. Export includes: profile data, verification history, credit history, API key metadata (not secrets), webhook configurations.
+
+### Secrets Management
+
+| Secret | Storage |
+|--------|---------|
+| Upstream API key | Kubernetes Secret (DOKS) |
+| Stripe secret key | Environment variable |
+| Stripe webhook signing secret | Environment variable |
+| Google OAuth client secret | Environment variable |
+| Database connection string | Environment variable |
+| Redis connection string | Environment variable |
+| Session signing key | Environment variable |
+| DO Spaces access keys | Environment variable |
+
+No secrets in code, config files, or version control. All injected via Kubernetes Secrets on DOKS with encryption at rest.
+
+---
+
+## 15. Monitoring & Observability
 
 ### Key Metrics (Prometheus)
 
@@ -637,7 +1097,7 @@ GET /health/startup  → Initialization complete (workers connected to queue)
 
 ---
 
-## 10. Scaling Projections
+## 16. Scaling Projections
 
 | Users | Emails/day | Peak req/sec | Workers Needed | Redis Memory | PostgreSQL Size/month |
 |-------|-----------|-------------|----------------|-------------|----------------------|
@@ -651,22 +1111,103 @@ GET /health/startup  → Initialization complete (workers connected to queue)
 
 ---
 
-## 11. Key Design Decisions
+## 17. Disaster Recovery & Backups
+
+### Infrastructure: DigitalOcean Managed Services
+
+Both PostgreSQL and Redis run on DigitalOcean Managed Databases, which provide automated backups, failover, and maintenance.
+
+### Recovery Objectives
+
+| Metric | Target |
+|--------|--------|
+| **RPO** (Recovery Point Objective) | < 1 hour — at most 1 hour of data loss |
+| **RTO** (Recovery Time Objective) | < 30 minutes — service restored within 30 minutes |
+
+### PostgreSQL Backup Strategy
+
+- **Automatic daily backups**: DO Managed PostgreSQL takes daily full backups (retained for 7 days)
+- **WAL archiving**: Write-Ahead Log streaming enables point-in-time recovery (PITR) to any point within the retention window
+- **Standby node**: DO Managed PostgreSQL High Availability option provides an automatic standby with failover in < 30 seconds
+- **Manual backups**: On-demand backup before major migrations or schema changes via `pg_dump`
+
+### Redis Backup Strategy
+
+- **AOF persistence**: `appendonly yes` with `appendfsync everysec` — at most 1 second of data loss for queue state
+- **DO Managed Redis**: Automatic daily snapshots retained for 7 days
+- **Eviction policy**: `maxmemory-policy noeviction` — BullMQ requires this; Redis never drops data
+- **Recovery**: On Redis failure, BullMQ jobs are recovered from AOF. In-flight jobs are re-queued via BullMQ's stalled job detection.
+
+### Application Recovery
+
+**Stateless workers**: All API gateway and worker processes are stateless. Recovery = restart the process. No data stored in-process.
+
+**Queue recovery**: If Redis is lost entirely:
+1. In-flight jobs: Lost (workers were mid-processing). Credits already deducted — reconciliation job detects drift and corrects.
+2. Pending jobs: Lost from Redis. Users must re-submit bulk jobs. Credit refund triggered by reconciliation.
+3. Completed jobs: Results already in PostgreSQL and DO Spaces. No loss.
+
+**Credit reconciliation**: The 5-minute reconciliation job (Redis ↔ PostgreSQL) ensures that any Redis data loss is detected and corrected within 10 minutes.
+
+### DigitalOcean Spaces (File Storage)
+
+- DO Spaces has built-in redundancy (3x replication within the datacenter)
+- No additional backup needed for CSV result files (14-day retention with auto-delete)
+
+### Failure Runbook Summary
+
+| Component | Failure Mode | Recovery Action | Estimated Downtime |
+|-----------|-------------|----------------|-------------------|
+| PostgreSQL | Primary down | Auto-failover to standby (DO managed) | < 30 seconds |
+| PostgreSQL | Data corruption | PITR to last known good state | 15-30 minutes |
+| Redis | Primary down | Auto-failover to standby (DO managed) | < 30 seconds |
+| Redis | Complete data loss | Restore from AOF/snapshot + reconciliation | 5-15 minutes |
+| API Gateway | Process crash | Auto-restart (Kubernetes pod restart) | < 5 seconds |
+| Workers | Process crash | Auto-restart + stalled job re-queue | < 30 seconds |
+| DO Spaces | Region outage | No fallback (accept downtime for downloads) | Variable |
+| Cloudflare | Edge outage | Bypass to origin (if configured) | Variable |
+| Upstream API | Prolonged outage | Circuit breaker open; jobs queue; alert team | 0 (graceful degradation) |
+
+### Deployment Strategy
+
+- **Zero-downtime deploys**: Rolling deployment via Kubernetes on DOKS
+- **Worker drain**: Workers finish in-flight jobs before shutdown (graceful shutdown signal)
+- **Database migrations**: Run as separate step before deploy. Backward-compatible migrations only (no dropping columns in the same deploy that removes code using them).
+- **Rollback**: Previous container image tagged and ready. Rollback = redeploy previous image.
+- **Canary deploys**: For critical changes, route 5% of traffic to new version first. Monitor error rates for 10 minutes before full rollout.
+
+---
+
+## 18. Key Design Decisions
 
 | Decision | Choice | Alternatives Considered | Rationale |
 |----------|--------|------------------------|-----------|
+| Backend framework | Express | Fastify, Next.js API routes | Battle-tested, massive ecosystem, familiar patterns |
+| Frontend framework | Next.js App Router | Pages Router, Remix, Vite SPA | Server Components for dashboard data loading; modern React patterns |
+| UI framework | Tailwind + shadcn/ui | MUI, Chakra UI, custom CSS | Full dark theme control; copy-paste components; no vendor lock-in |
+| ORM | Drizzle ORM | Prisma, Knex.js, raw pg | SQL-like, lightweight; stays close to SQL for credit system atomics |
+| Redis client | ioredis | node-redis | Single client library (BullMQ uses ioredis internally); Lua scripting |
 | Queue technology | BullMQ Pro | SQS, RabbitMQ, Kafka | TypeScript-native; built-in multi-tenant groups; no external infra beyond Redis |
 | Rate limiting | Redis Lua (sliding window) | Token bucket, leaky bucket | Sliding window gives accurate, smooth limiting for per-user fairness |
 | Credit storage | Redis + PostgreSQL hybrid | PostgreSQL only, Redis only | Redis for speed (hot path), PostgreSQL for durability (audit trail) |
 | Upstream call control | Leaky bucket (global) | Token bucket | Smooth constant-rate outflow protects upstream API |
-| Real-time updates | SSE | WebSockets, polling | Simpler than WS; auto-reconnect; sufficient for progress bars |
+| Real-time updates | SSE | WebSockets, polling | Simpler than WS; auto-reconnect; Last-Event-ID for reconnection |
 | Circuit breaker | `opossum` | Custom, Resilience4j | Lightweight Node.js library; promise-based |
-| Auth | Google OAuth | Email/password only, Magic links | Matches existing EmailVerify flow; lowest friction signup |
-| Payments | Stripe | Paddle, LemonSqueezy | Industry standard; existing EmailVerify integration |
+| Auth | Google OAuth + email/password | OAuth only, Magic links | Both methods for maximum user flexibility; email verification required |
+| Payments | Stripe | Paddle, LemonSqueezy | Industry standard; one-time purchases + recurring subscriptions |
+| Email service | Resend | SendGrid, Nodemailer + SMTP | Modern API, React Email templates, great DX |
+| File storage | DigitalOcean Spaces | Local filesystem, PostgreSQL LOB | S3-compatible; pre-signed URLs; lifecycle rules for auto-cleanup |
+| Edge/CDN | Cloudflare | DO Load Balancer only | DDoS protection, WAF, bot management, CDN for static assets |
+| Testing | Vitest | Jest, Node.js test runner | Fast, Vite-powered, native ESM + TypeScript, Jest-compatible |
+| Deployment | DigitalOcean Kubernetes | DO App Platform, Droplets + PM2 | Horizontal worker scaling, full control over scheduling and networking |
+| State management | TanStack Query | Zustand, Redux, React Context | Server state caching, background refetch, optimistic updates |
+| Forms | React Hook Form + Zod | Formik + Yup, native forms | Performant uncontrolled forms; shared Zod schemas with backend |
+| Charts | Recharts | Chart.js, Tremor | React-native, declarative, supports all chart types needed |
+| Package manager | npm | pnpm, yarn | Default, zero setup, universal compatibility |
 
 ---
 
-## 12. References (from deep research)
+## 19. References (from deep research)
 
 ### Production Case Studies
 - Slack Engineering: Scaling Job Queue — 1.4B jobs/day, Redis OOM outage, migration to Kafka
