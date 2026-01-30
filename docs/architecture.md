@@ -222,6 +222,8 @@ HALF-OPEN (allow 5 test calls)
 
 **Retry Budget**: Total retries capped at 10% of normal traffic volume. When normal traffic drops to zero, retries naturally stop (prevents thundering herd on recovery).
 
+**State Persistence**: Circuit breaker state is stored in Redis (`cb:upstream:state`) and shared across all worker processes. When any worker detects a state transition (CLOSED → OPEN, OPEN → HALF-OPEN, etc.), it writes the new state to Redis. All workers read CB state from Redis before making upstream calls. This ensures consistent behavior across the worker pool — if one worker trips the breaker, all workers respect the OPEN state immediately rather than each maintaining independent circuit breaker instances.
+
 ---
 
 ### Layer 5: Upstream Proxy (Single Pipe)
@@ -287,6 +289,16 @@ If a retry hits the upstream with the same key, the cached result is returned in
 9. On completion: notify via webhook + SSE
 10. Failed individual emails: refund 1 credit each
 ```
+
+### Bulk Job Failure Semantics
+
+**Per-email failure** (most common): Individual emails that fail all 3 retry attempts move to the DLQ. Each failed email is refunded exactly 1 credit atomically (Redis INCRBY + PostgreSQL credit_event with type 'refund'). The bulk job continues processing remaining emails. The final results CSV marks failed emails as status 'unknown' with reason 'verification_failed'.
+
+**Full batch failure** (rare): If an entire batch of 100 emails fails (e.g., all 3 attempts exhaust for every email in the batch), all 100 credits are refunded individually. The batch is marked failed in the DLQ. The bulk job continues with remaining batches.
+
+**Full job failure** (catastrophic): If more than 50% of batches fail, the bulk job status is set to 'failed'. All unprocessed email credits are refunded in bulk. Successfully verified emails retain their results. The user receives both SSE error event and `bulk.failed` webhook. Partial results are still available for download.
+
+**Credit reconciliation guarantee**: In all failure modes, the 5-minute reconciliation job ensures Redis and PostgreSQL credit balances converge. No credit is permanently lost due to failures.
 
 ### Credit Ledger (PostgreSQL)
 
@@ -601,6 +613,16 @@ Attempt 4: 30 minutes after failure (final)
 - **After 4 failures**: Webhook marked as `failing`. User notified via email. Webhook paused until user re-enables from dashboard.
 - **Logging**: All delivery attempts logged with status code, latency, and error details
 
+### Webhook Idempotency
+
+Every webhook event includes a unique `id` field (format: `evt_{random_hex}`). Recipients should use this ID to deduplicate deliveries. If the same event is delivered multiple times due to retries, the `id` remains the same across all attempts. Recipients should:
+
+1. Store the `id` of each processed event
+2. Before processing, check if the `id` has already been handled
+3. If duplicate, return 200 (success) without re-processing
+
+The platform guarantees that each event ID is globally unique and immutable across retry attempts. The `webhook_deliveries` table tracks all attempts per event for internal deduplication and audit.
+
 ### Webhook Database Schema
 
 ```sql
@@ -696,14 +718,16 @@ data: {"job_id":"bulk-xyz","valid":42000,"invalid":5000,"unknown":2000,"risky":1
 
 ---
 
-## 10. Stripe Integration
+## 10. Payment Integration
+
+> **Decision Pending**: Payment provider is TBD — evaluating Stripe and Razorpay. The flows below are documented using Stripe terminology as a reference architecture. If Razorpay is selected, the equivalent Razorpay constructs (Orders, Subscriptions, Webhooks) replace the Stripe-specific terms, but the credit-system integration pattern remains identical.
 
 ### Payment Models
 
-The platform supports two Stripe payment flows:
+The platform supports two payment flows:
 
-1. **One-Time Credit Purchases** — via Stripe Checkout Sessions (payment mode)
-2. **Recurring Subscriptions** — via Stripe Checkout Sessions (subscription mode) with monthly/yearly billing
+1. **One-Time Credit Purchases** — via hosted checkout session (payment mode)
+2. **Recurring Subscriptions** — via hosted checkout session (subscription mode) with monthly/yearly billing
 
 ### One-Time Purchase Flow
 ```
@@ -1021,6 +1045,20 @@ All user input is validated at the API gateway before reaching business logic:
 - **String inputs**: Max length enforced on all text fields. No raw SQL or HTML injection possible (parameterized queries + React auto-escaping).
 - **API request body**: JSON schema validation with strict mode (reject unknown fields)
 
+### Auth Endpoint Rate Limits
+
+Unauthenticated auth endpoints have explicit rate limits to prevent brute-force and credential stuffing attacks:
+
+| Endpoint | Rate Limit | Window | Lockout |
+|----------|-----------|--------|---------|
+| `POST /auth/sign-in` | 5 attempts | 15 minutes | 30-minute lockout after 5 failures per email |
+| `POST /auth/sign-up` | 3 attempts | 1 hour | Per IP; prevents mass account creation |
+| `POST /auth/password-reset` | 3 requests | 1 hour | Per email; prevents email flooding |
+| `POST /auth/verify-email` | 5 attempts | 15 minutes | Per user; code invalidated after 5 wrong attempts |
+| `POST /auth/callback/google` | 10 attempts | 1 minute | Per IP; prevents OAuth abuse |
+
+All auth rate limits are enforced via Redis sliding window (same mechanism as API rate limits). Failed attempts are tracked by a composite key of IP + email (where applicable) to prevent both distributed attacks and single-source attacks.
+
 ### Rate Limiting Evasion Prevention
 
 - Per-user rate limits are enforced by authenticated user ID, not by IP address — prevents circumvention via IP rotation
@@ -1049,6 +1087,13 @@ All user input is validated at the API gateway before reaching business logic:
 6. User record marked with deleted_at timestamp, email_verified = false
 7. Anonymized user record retained indefinitely for financial audit compliance
 ```
+
+**Account Recovery During Grace Period**: During the 30-day grace period, the user's account remains fully functional if they log back in. Upon login during the grace period:
+1. The pending deletion is cancelled automatically
+2. All account data, credits, subscriptions, and API keys remain intact
+3. The user receives a confirmation email that deletion has been cancelled
+4. No partial anonymization occurs — the account is either fully active or fully anonymized after 30 days
+5. If the user has an active subscription, billing continues uninterrupted during the grace period (cancellation of subscription is a separate action)
 
 **Data Export**: Users can request a full data export (GDPR Article 20 — Right to Data Portability) from the profile page. Export includes: profile data, verification history, credit history, API key metadata (not secrets), webhook configurations.
 
@@ -1087,6 +1132,33 @@ No secrets in code, config files, or version control. All injected via Kubernete
 | `worker_concurrency_utilization` | > 90% for 5 min | Scale up workers |
 | `http_503_rate` | > 5% | Load shedding active; scale or investigate |
 
+### Distributed Tracing
+
+**Technology**: OpenTelemetry SDK (Node.js) with Jaeger or Grafana Tempo as the trace backend.
+
+Every request receives a trace ID at the API Gateway. This trace ID propagates through all downstream operations:
+
+```
+API Gateway → BullMQ job metadata → Worker → Upstream API call
+     │              │                  │            │
+     └─ trace_id ─→ job.data.traceId ─→ span ────→ span
+```
+
+**Trace context propagation**:
+- HTTP headers: `traceparent` (W3C Trace Context standard)
+- BullMQ jobs: `traceId` and `spanId` fields in job data
+- Upstream calls: `X-Request-ID` header set to trace ID for correlation with upstream provider logs
+
+**Key spans instrumented**:
+- `gateway.auth` — API key validation
+- `gateway.credit_check` — Redis Lua credit deduction
+- `queue.enqueue` — Job added to BullMQ
+- `worker.process` — Job processing start to finish
+- `upstream.verify` — Single upstream API call (includes response time, status code)
+- `worker.credit_refund` — Credit refund on failure
+
+**Sampling**: 10% of normal traffic sampled. 100% of error traces captured. Bulk job batches sampled at 1% (high volume).
+
 ### Health Check Endpoints
 
 ```
@@ -1109,6 +1181,16 @@ GET /health/startup  → Initialization complete (workers connected to queue)
 
 **Note**: At 5,000+ users, the single upstream API key becomes the true bottleneck. At that scale, negotiate multiple upstream API keys and implement key rotation/load balancing across them.
 
+### Upstream API Key Scaling Strategy
+
+When multiple upstream API keys become available, the system uses a **weighted round-robin** strategy:
+
+1. **Key registry**: All upstream keys stored in Redis hash (`upstream:keys`) with metadata: key ID, weight, current error rate, daily usage count
+2. **Selection**: Workers select the next key using weighted round-robin. Keys with lower error rates receive higher effective weight.
+3. **Per-key circuit breakers**: Each upstream key gets its own circuit breaker instance (stored in Redis at `cb:upstream:{keyId}:state`). If one key's upstream account is rate-limited or suspended, only that key's breaker opens — other keys continue operating.
+4. **Rotation**: New keys can be added to the registry without restart. Deprecated keys are drained (no new jobs assigned) and removed after in-flight jobs complete.
+5. **Monitoring**: Per-key metrics exported to Prometheus (`upstream_key_usage_total`, `upstream_key_error_rate`, `upstream_key_latency_p99`) for visibility into key health.
+
 ---
 
 ## 17. Disaster Recovery & Backups
@@ -1116,6 +1198,17 @@ GET /health/startup  → Initialization complete (workers connected to queue)
 ### Infrastructure: DigitalOcean Managed Services
 
 Both PostgreSQL and Redis run on DigitalOcean Managed Databases, which provide automated backups, failover, and maintenance.
+
+### Redis High Availability (Sentinel)
+
+Production Redis uses a **Sentinel-managed replica set** (provided by DigitalOcean Managed Redis):
+
+- **Topology**: 1 primary + 2 read replicas + 3 Sentinel processes (managed by DO)
+- **Failover**: Automatic — Sentinel promotes a replica to primary within 10–30 seconds upon primary failure
+- **Client configuration**: Application connects via Sentinel-aware ioredis configuration (`sentinels` array + `name` parameter), not directly to the primary IP. This ensures automatic reconnection to the new primary after failover.
+- **BullMQ compatibility**: BullMQ Pro supports Sentinel connections natively via ioredis. No special configuration beyond passing the Sentinel connection options.
+- **Split-brain protection**: `min-replicas-to-write: 1` ensures the primary rejects writes if no replica is reachable, preventing data divergence during network partitions.
+- **Dedicated instances**: Queue Redis (BullMQ) and Cache/Session Redis run on separate managed instances to isolate failure domains and memory pressure.
 
 ### Recovery Objectives
 
@@ -1146,6 +1239,11 @@ Both PostgreSQL and Redis run on DigitalOcean Managed Databases, which provide a
 1. In-flight jobs: Lost (workers were mid-processing). Credits already deducted — reconciliation job detects drift and corrects.
 2. Pending jobs: Lost from Redis. Users must re-submit bulk jobs. Credit refund triggered by reconciliation.
 3. Completed jobs: Results already in PostgreSQL and DO Spaces. No loss.
+
+**In-flight job credit refund mechanism**: When workers crash or Redis is lost, in-flight jobs have already had their credits deducted (at the gateway) but no verification result exists in PostgreSQL. The reconciliation job detects this drift by comparing Redis credit balances against the PostgreSQL credit_events ledger sum. Specifically:
+- For each tenant, if Redis balance is lower than the PostgreSQL ledger sum (meaning credits were deducted in Redis but no corresponding `deduct` event was written to PostgreSQL), the reconciliation job auto-corrects Redis to match PostgreSQL.
+- BullMQ's stalled job detection (configured at 30-second intervals) requeues jobs that were in-flight when a worker crashed — these jobs are retried without additional credit deduction (the credit was already deducted).
+- If a stalled job exhausts all retries and moves to the DLQ, the DLQ handler refunds the credit via the standard refund path (Redis INCRBY + PostgreSQL credit_event type 'refund').
 
 **Credit reconciliation**: The 5-minute reconciliation job (Redis ↔ PostgreSQL) ensures that any Redis data loss is detected and corrected within 10 minutes.
 
