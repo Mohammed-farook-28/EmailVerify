@@ -108,16 +108,16 @@ The platform is built with Next.js (App Router) + TypeScript on the frontend and
 **Full feature parity with original EmailVerify:**
 - Landing page (simplified)
 - Authentication (Google OAuth + email/password with email verification)
-- Dashboard (metrics, charts, donut/trend visualizations)
+- ~~Dashboard (metrics, charts, donut/trend visualizations)~~ — **Removed (Decision #6):** No dedicated dashboard page. `/home` redirects to `/home/quick-verify`. Metrics data is consumed by sidebar and quick-verify page header.
 - Quick Verify (single email, real-time results with reputation score)
 - Bulk Verify (file upload + copy/paste, SSE progress, CSV export)
 - History (bulk job tracking)
-- API Keys management (create, expire, delete, `ev_` prefix format)
+- API Keys management (create, expire, delete, `ek_` prefix format — Decision #3)
 - Usage History (filterable, exportable verification logs)
 - Billing (one-time credit purchases + 9 subscription tiers, payment provider TBD)
 - Profile (name, email, password, language, avatar, account deletion)
 - Public REST API (single verify, bulk verify, credits, webhooks)
-- Active Verification (ReachInbox integration)
+- Active Verification (generic/pluggable integration — **Decision #11:** ReachInbox skipped, architecture is provider-agnostic via `IntegrationProvider` interface)
 - Error states (404, 500, payment success/failed, VPN detection)
 
 ### Growth Features (Post-MVP)

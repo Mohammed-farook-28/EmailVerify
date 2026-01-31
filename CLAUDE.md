@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EmailVerify is a multi-tenant email verification SaaS platform. It proxies a **single upstream API key** to 1000+ users, managing fair queuing, credit accounting, and resilience. This is based on an existing EmailVerify platform but is **not a 1:1 replica** — modifications and improvements may be made.
+EmailKit is a multi-tenant email verification SaaS platform. It proxies a **single upstream API key** to 1000+ users, managing fair queuing, credit accounting, and resilience. This is based on an existing EmailVerify platform but is **not a 1:1 replica** — modifications and improvements may be made.
 
 **Current status**: Specification phase only. Architecture and UI specs are complete. No source code, build system, tests, or lint configuration exists yet.
 
@@ -41,7 +41,7 @@ EmailVerify is a multi-tenant email verification SaaS platform. It proxies a **s
 | Circuit Breaker | opossum |
 | HTTP Client | undici (connection pooling) |
 | Auth | Google OAuth 2.0 |
-| Payments | Stripe |
+| Payments | TBD (Stripe or Razorpay — abstracted via PaymentProvider interface) |
 | Real-time | Server-Sent Events (SSE) |
 | Monitoring | Prometheus + Grafana |
 
@@ -80,7 +80,7 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 
 ## API Surface
 
-**Public API** (Bearer token auth via `sk_` prefixed API key):
+**Public API** (Bearer token auth via `ek_` prefixed API key):
 - `POST /api/v1/verify` — Single email
 - `POST /api/v1/verify/bulk` — Bulk (CSV/JSON)
 - `GET /api/v1/verify/bulk/:jobId` — Job status
@@ -92,7 +92,7 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 
 **Internal API** (session cookie auth):
 - `/auth/*` — Google OAuth
-- `/home/*` — Dashboard, quick-verify, bulk-verify, api-keys, usage, billing, profile
+- `/home/*` — Quick-verify, bulk-verify, api-keys, credit-history, billing, profile, active-verification
 
 ## Key Design Decisions
 
@@ -106,14 +106,15 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 
 | Route | Page |
 |-------|------|
-| `/home` | Dashboard |
+| `/home` | Redirects to `/home/quick-verify` (no dashboard page) |
 | `/home/quick-verify` | Single email verification |
 | `/home/bulk-verify` | Bulk verification (upload/paste) |
 | `/home/history` | Bulk job history |
 | `/home/api-keys` | API key management |
-| `/home/usage` | Verification history |
+| `/home/credit-history` | Credit transaction history |
 | `/home/billing` | Credits and subscriptions |
 | `/home/profile` | User settings |
+| `/home/active-verification` | Deliverability (active verification) |
 | `/auth/sign-in` | Sign in |
 | `/auth/sign-up` | Sign up |
 | `/auth/password-reset` | Password reset |

@@ -66,11 +66,14 @@ Every layer knows when to stop accepting work. An overloaded system that rejects
 
 | Tier | Requests/sec | Requests/hour | Concurrent |
 |------|-------------|---------------|------------|
-| Starter | 10 | 1,000 | 5 |
+| Free/Starter | 10 | 1,000 | 5 |
+| Popular | 15 | 5,000 | 10 |
 | Professional | 25 | 10,000 | 15 |
 | Business | 50 | 20,000 | 30 |
 | Enterprise | 100 | 50,000 | 50 |
 | Premium | 200 | 100,000 | 100 |
+| Ultimate | 300 | 500,000 | 150 |
+| Mega | 400 | 750,000 | 175 |
 | Titan | 500 | 1,000,000 | 200 |
 
 **Global Rate Limit**: 2,000 requests/sec total across all users (protects upstream API)
@@ -414,7 +417,7 @@ Client                Gateway              Redis           BullMQ          Worke
 | **Circuit Breaker** | `opossum` | Lightweight, promise-based, fits Node.js event loop |
 | **HTTP Client** | `undici` | Connection pooling, fastest Node.js HTTP client for upstream proxy |
 | **Auth** | Google OAuth 2.0 + email/password | Both methods; server-side PostgreSQL sessions; httpOnly cookies |
-| **Payments** | Stripe | One-time purchases + recurring subscriptions; webhooks for lifecycle |
+| **Payments** | TBD (Stripe or Razorpay) | Abstracted via PaymentProvider interface; one-time purchases + recurring subscriptions; webhooks for lifecycle |
 | **Email** | Resend | Transactional emails (verification, password reset, alerts); React Email templates |
 | **Real-Time** | Server-Sent Events (SSE) | Simpler than WebSockets; auto-reconnect; Last-Event-ID for resumption |
 | **File Storage** | DigitalOcean Spaces | S3-compatible; bulk result CSVs; pre-signed URLs; 14-day retention |
@@ -720,14 +723,14 @@ data: {"job_id":"bulk-xyz","valid":42000,"invalid":5000,"unknown":2000,"risky":1
 
 ## 10. Payment Integration
 
-> **Decision Pending**: Payment provider is TBD — evaluating Stripe and Razorpay. The flows below are documented using Stripe terminology as a reference architecture. If Razorpay is selected, the equivalent Razorpay constructs (Orders, Subscriptions, Webhooks) replace the Stripe-specific terms, but the credit-system integration pattern remains identical.
+> **Decision #5**: Payment provider is TBD — evaluating Stripe and Razorpay. The integration is abstracted behind a `PaymentProvider` interface with methods: `createCheckout()`, `verifyWebhook()`, `getSession()`, `createSubscription()`, `cancelSubscription()`, `changeSubscription()`. The flows below use Stripe terminology as a reference architecture. If Razorpay is selected, the equivalent constructs replace the Stripe-specific terms, but the credit-system integration pattern remains identical.
 
 ### Payment Models
 
 The platform supports two payment flows:
 
 1. **One-Time Credit Purchases** — via hosted checkout session (payment mode)
-2. **Recurring Subscriptions** — via hosted checkout session (subscription mode) with monthly/yearly billing
+2. **Recurring Subscriptions** — via hosted checkout session (subscription mode) with monthly/annual billing
 
 ### One-Time Purchase Flow
 ```
@@ -746,12 +749,12 @@ The platform supports two payment flows:
 ### Subscription Flow
 ```
 1. User selects plan + billing cycle on /home/billing
-2. POST /home/billing/checkout { type: "subscription", plan: "professional", cycle: "yearly" }
+2. POST /home/billing/checkout { type: "subscription", plan: "professional", cycle: "annual" }
 3. Server creates Stripe Checkout Session (mode: "subscription")
 4. Redirect user to Stripe hosted checkout page
 5. On success: Stripe sends checkout.session.completed + invoice.paid webhooks
 6. Server creates/updates subscription record
-7. Credit user's balance with plan's monthly/yearly allocation
+7. Credit user's balance with plan's monthly/annual allocation
 8. Redirect user back to /home/billing?success=true
 ```
 
@@ -783,7 +786,7 @@ The platform supports two payment flows:
 Webhook endpoint:      POST /home/billing/webhook
 Webhook signing secret: whsec_xxxxx (stored in environment variable)
 Idempotency:           Stripe event ID used as idempotency_key in credit_events
-Customer mapping:      Stripe customer ID stored on users table (stripe_customer_id)
+Customer mapping:      Payment provider customer ID stored on users table (payment_customer_id)
 ```
 
 ### Credit Expiry
@@ -863,13 +866,15 @@ test@example.com,valid,true,92,accepted_email,"mx1.example.com,mx2.example.com",
 CREATE TABLE users (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email           VARCHAR(255) UNIQUE NOT NULL,
-    name            VARCHAR(255),
+    first_name      VARCHAR(255),
+    last_name       VARCHAR(255),
     avatar_url      TEXT,
     google_id       VARCHAR(255) UNIQUE,
     password_hash   VARCHAR(255),          -- optional (for email/password login)
     email_verified  BOOLEAN DEFAULT FALSE, -- must verify email before dashboard access
-    stripe_customer_id VARCHAR(255) UNIQUE, -- Stripe customer ID for billing
+    payment_customer_id VARCHAR(255) UNIQUE, -- payment provider customer ID (Stripe or Razorpay)
     language        VARCHAR(10) DEFAULT 'en',
+    deletion_requested_at TIMESTAMPTZ,     -- 30-day GDPR grace period start
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -890,7 +895,7 @@ CREATE TABLE api_keys (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name            VARCHAR(255) NOT NULL,
-    key_prefix      VARCHAR(20) NOT NULL,  -- 'ev_' first 3 chars for display
+    key_prefix      VARCHAR(20) NOT NULL,  -- 'ek_' first 3 chars for display
     key_hash        VARCHAR(255) NOT NULL,  -- bcrypt hash of full key
     expires_at      TIMESTAMPTZ,
     last_used_at    TIMESTAMPTZ,
@@ -906,8 +911,8 @@ CREATE TABLE subscriptions (
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     plan_name       VARCHAR(50) NOT NULL,
     credits_per_period INTEGER NOT NULL,
-    billing_cycle   VARCHAR(20) NOT NULL,  -- 'monthly', 'yearly'
-    stripe_sub_id   VARCHAR(255),
+    billing_cycle   VARCHAR(20) NOT NULL,  -- 'monthly', 'annual'
+    payment_sub_id  VARCHAR(255),          -- payment provider subscription ID
     status          VARCHAR(20) DEFAULT 'active',
     current_period_start TIMESTAMPTZ,
     current_period_end   TIMESTAMPTZ,
@@ -937,7 +942,7 @@ CREATE TABLE verification_results (
     status          VARCHAR(20) NOT NULL,   -- 'valid','invalid','unknown','risky','disposable','catch_all','role'
     method          VARCHAR(10) NOT NULL,    -- 'web', 'api'
     bulk_job_id     UUID,                    -- NULL for single verify
-    risk_score      SMALLINT,
+    risk_score      SMALLINT,                -- 0-100 (Decision #2)
     details         JSONB,                   -- full verification response
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -948,10 +953,33 @@ CREATE TABLE bulk_jobs (
     total_emails    INTEGER NOT NULL,
     processed       INTEGER DEFAULT 0,
     status          VARCHAR(20) DEFAULT 'pending', -- 'pending','processing','completed','failed'
+    source_type     VARCHAR(20) NOT NULL DEFAULT 'file_upload', -- 'file_upload' or 'paste'
+    file_name       VARCHAR(255),                  -- original file name (NULL for paste)
     results_url     TEXT,                           -- S3/storage URL for CSV download
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     completed_at    TIMESTAMPTZ
 );
+
+CREATE TABLE integrations (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source          VARCHAR(50) NOT NULL,          -- integration provider identifier
+    credentials_encrypted TEXT NOT NULL,            -- AES-256 encrypted credentials
+    status          VARCHAR(20) DEFAULT 'connected', -- 'connected', 'disconnected', 'error'
+    last_sync_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE integration_emails (
+    id              BIGSERIAL PRIMARY KEY,
+    integration_id  UUID NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+    email           VARCHAR(255) NOT NULL,
+    current_status  VARCHAR(20),                    -- verification status
+    last_verified_at TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_integration_emails_integration ON integration_emails(integration_id, current_status);
 ```
 
 ---
@@ -961,14 +989,13 @@ CREATE TABLE bulk_jobs (
 ### Public API (for user API keys)
 
 ```
-Authentication: Bearer ev_xxxxxxxx (API key in Authorization header)
+Authentication: Bearer ek_xxxxxxxx (API key in Authorization header)
 
 POST   /api/v1/verify              Single email verification
 POST   /api/v1/bulk                Bulk verification (upload CSV or JSON array)
 GET    /api/v1/bulk/:jobId         Get bulk job status and progress
 GET    /api/v1/bulk/:jobId/results Download bulk results (CSV)
 GET    /api/v1/credits             Get current credit balance
-GET    /api/v1/usage               Get usage history (paginated)
 ```
 
 ### Internal API (for web dashboard, session auth)
@@ -976,10 +1003,10 @@ GET    /api/v1/usage               Get usage history (paginated)
 ```
 Authentication: Session cookie
 
-POST   /auth/callback/google       Google OAuth callback
+GET    /auth/callback/google       Google OAuth callback (standard OAuth redirect)
 POST   /auth/sign-out              Sign out (destroy session)
 
-GET    /home                        Dashboard data
+GET    /home                        Metrics data (no dashboard page — /home redirects to /home/quick-verify)
 POST   /home/quick-verify          Single verify via web UI
 POST   /home/bulk-verify           Bulk verify via web UI (file upload)
 GET    /home/bulk-verify/:id       Bulk job progress (SSE endpoint)
@@ -988,12 +1015,11 @@ GET    /home/api-keys              List API keys
 POST   /home/api-keys              Create API key
 DELETE /home/api-keys/:id          Delete API key
 
-GET    /home/usage                 Usage history (with filters)
-GET    /home/usage/export          Export usage data (CSV)
+GET    /home/credit-history         Credit transaction history (renamed from /home/usage)
 
 GET    /home/billing               Billing info and plans
-POST   /home/billing/checkout      Create Stripe checkout session
-POST   /home/billing/webhook       Stripe webhook handler
+POST   /home/billing/checkout      Create payment provider checkout session
+POST   /home/billing/webhook       Payment provider webhook handler
 
 GET    /home/profile               Profile info
 PUT    /home/profile/name          Update name
@@ -1027,13 +1053,13 @@ DELETE /home/profile               Delete account
 
 ### API Key Security
 
-- **Format**: `ev_` prefix + 32 cryptographically random bytes (base64url encoded)
+- **Format**: `ek_` prefix + 32 cryptographically random bytes (base64url encoded)
 - **Storage**: Only the bcrypt hash is stored in PostgreSQL. Plaintext key shown once at creation, never retrievable again.
 - **Transport**: Bearer token in `Authorization` header over TLS only
 - **Rotation**: Users create a new key and delete the old one. No in-place rotation.
 - **Expiration**: Configurable at creation (1 month, 3 months, 6 months, 1 year, never). Expired keys return 401.
 - **Revocation**: DELETE API key → immediate invalidation. API key cache (if any) invalidated within 30 seconds.
-- **Display**: Only the prefix + first 8 characters shown in the dashboard (e.g., `ev_Ue7HpvL9...`)
+- **Display**: Only the prefix + first 8 characters shown in the dashboard (e.g., `ek_Ue7HpvL9...`)
 
 ### Input Validation
 
@@ -1082,7 +1108,7 @@ All auth rate limits are enforced via Redis sliding window (same mechanism as AP
    - sessions: deleted (CASCADE)
    - webhooks: deleted (CASCADE)
    - credit_events: user_id retained for financial audit (anonymized user record)
-   - subscriptions: stripe_sub_id retained for billing records
+   - subscriptions: payment_sub_id retained for billing records
    - bulk_jobs: results files deleted from DO Spaces
 6. User record marked with deleted_at timestamp, email_verified = false
 7. Anonymized user record retained indefinitely for financial audit compliance
@@ -1102,8 +1128,8 @@ All auth rate limits are enforced via Redis sliding window (same mechanism as AP
 | Secret | Storage |
 |--------|---------|
 | Upstream API key | Kubernetes Secret (DOKS) |
-| Stripe secret key | Environment variable |
-| Stripe webhook signing secret | Environment variable |
+| Payment provider secret key | Environment variable |
+| Payment webhook signing secret | Environment variable |
 | Google OAuth client secret | Environment variable |
 | Database connection string | Environment variable |
 | Redis connection string | Environment variable |
@@ -1292,7 +1318,7 @@ Production Redis uses a **Sentinel-managed replica set** (provided by DigitalOce
 | Real-time updates | SSE | WebSockets, polling | Simpler than WS; auto-reconnect; Last-Event-ID for reconnection |
 | Circuit breaker | `opossum` | Custom, Resilience4j | Lightweight Node.js library; promise-based |
 | Auth | Google OAuth + email/password | OAuth only, Magic links | Both methods for maximum user flexibility; email verification required |
-| Payments | Stripe | Paddle, LemonSqueezy | Industry standard; one-time purchases + recurring subscriptions |
+| Payments | TBD (Stripe or Razorpay) | Paddle, LemonSqueezy | Abstracted via PaymentProvider interface (Decision #5); one-time purchases + recurring subscriptions |
 | Email service | Resend | SendGrid, Nodemailer + SMTP | Modern API, React Email templates, great DX |
 | File storage | DigitalOcean Spaces | Local filesystem, PostgreSQL LOB | S3-compatible; pre-signed URLs; lifecycle rules for auto-cleanup |
 | Edge/CDN | Cloudflare | DO Load Balancer only | DDoS protection, WAF, bot management, CDN for static assets |

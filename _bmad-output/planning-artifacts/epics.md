@@ -183,7 +183,7 @@ This document provides the complete epic and story breakdown for EmailKit, decom
 - Health check endpoints: /health/live, /health/ready, /health/startup
 
 **From Architecture — API**
-- Public API: Bearer token auth (ev_ prefix keys), 6 endpoint groups
+- Public API: Bearer token auth (ek_ prefix keys), 6 endpoint groups
 - Internal API: Session cookie auth, 15+ endpoint groups
 - Webhook system: HMAC-SHA256 signing, 4 event types, 4-attempt retry, idempotency via event IDs
 - SSE for bulk job progress: 4 event types (progress, status_change, error, results_summary), Last-Event-ID reconnection
@@ -262,39 +262,133 @@ This document provides the complete epic and story breakdown for EmailKit, decom
 - FR64: Epic 3 - Payment success/failure modals
 - FR65: Epic 1 - Free credits upon account creation
 
+## Three-Tier Structure
+
+Each epic is organized into three sections:
+
+1. **Backend Stories** — Server-side implementation: Express routes, database, Redis, BullMQ, workers, upstream proxy
+2. **API Contract** — Request/response schemas that both backend and frontend agree on, including type mismatches to resolve
+3. **Frontend Integration Stories** — Wiring the existing Next.js UI to the backend API: TanStack Query hooks, auth provider, SSE client, form submissions
+
+**Story Counts:**
+
+| Epic | Backend | Frontend | Total | Changes |
+|------|---------|----------|-------|---------|
+| 1. Auth & Profile | 7 | 7 | 14 | +4 frontend (BillingInfoForm, DataRetention, Profile Billing, SSO) |
+| 2. Verification Engine | 5 | 2 | 7 | -1 removed (Story 2.7), +1 added (CookiePolicyModal) |
+| 3. Billing | 4 | 2 | 6 | — |
+| 4. Bulk Verification | 5 | 10 | 15 | +7 frontend (AddEmails, CsvValidation, NameList, Settings, Rename, NoSearch, Export) |
+| 5. API & Webhooks | 6 | 2 | 8 | Story 5.8 rewritten (usage → credit history) |
+| 6. Deliverability | 4 | 4 | 8 | +2 frontend (Export-to-Integration, Category Breakdown); renamed from "Active Verification" |
+| 7. Landing & Public | 1 | 2 | 3 | — |
+| **Total** | **32** | **29** | **61** | +13 net stories |
+
+**Repos:**
+- Backend: `/Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify/` (this repo)
+- Frontend: `/Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/` (separate repo, UI 95% complete)
+
 ## Epic List
 
-### Epic 1: User Authentication & Profile Management — 7 stories
-Users can discover EmailKit, create accounts (email/password or Google OAuth), verify their email, sign in, manage their profile (name, email, password, avatar, language), link Google accounts, and delete their account with a 30-day recovery grace period. New users receive free credits upon signup to begin verifying immediately.
-**FRs covered:** FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR65
+### Epic 1: User Authentication & Profile Management — 14 stories (7 backend + 7 frontend)
+Users can create accounts (email/password or Google OAuth), verify their email, sign in, manage their profile, link Google accounts, and delete their account with a 30-day recovery grace period. New users receive free credits.
+**Backend:** Registration, OAuth, sign-in, password reset, profile CRUD, avatar upload, account deletion/anonymization
+**Frontend:** Auth provider + protected routes, auth form wiring, profile settings wiring
+**API Contract:** 15 endpoints (auth + profile), type mismatches documented (User.plan tiers, first/last name split)
+**FRs covered:** FR1–FR13, FR65
 **File:** [epic-01-auth-and-profile.md](epics/epic-01-auth-and-profile.md)
 
-### Epic 2: Email Verification Engine & Dashboard — 6 stories
-Users can verify individual emails via the web dashboard and see detailed results (status, reputation score, classification tags, technical details). The full 5-layer defense architecture is operational: API gateway with auth and credit checks, BullMQ Pro fair queue with per-tenant round-robin, autoscaling worker pool, circuit breaker with Redis state persistence, and upstream proxy with connection pooling. Credit system is live with atomic Redis Lua deduction, PostgreSQL ledger, automatic refund on failure, and 5-minute reconciliation. Dashboard displays credit balance, total verifications, validity distribution donut chart, and trend line chart.
-**FRs covered:** FR14, FR15, FR22, FR23, FR28, FR29, FR31, FR43, FR44, FR45, FR57, FR58, FR59, FR60, FR61
+### Epic 2: Email Verification Engine & Dashboard — 7 stories (5 backend + 2 frontend)
+Full 5-layer defense architecture operational. Single email verification, circuit breaker, credit reconciliation, dashboard metrics API, health checks.
+**Backend:** Verification engine (gateway→queue→worker→upstream), circuit breaker/DLQ, credit reconciliation, dashboard metrics API, health checks + monitoring
+**Frontend:** Single verify page integration, dashboard charts integration (Recharts)
+**API Contract:** Verification result schema, dashboard metrics schema, health endpoints
+**FRs covered:** FR14, FR15, FR22, FR23, FR28, FR29, FR31, FR43–FR45, FR57–FR61
 **File:** [epic-02-verification-engine.md](epics/epic-02-verification-engine.md)
 
-### Epic 3: Billing & Credit Purchases — 4 stories
-Users can purchase one-time credit packages (9 tiers, 1K–1M), subscribe to plans (9 tiers, monthly/yearly), upgrade/downgrade, and cancel subscriptions. Payment integration is abstracted to support Stripe or Razorpay. Subscription credits expire at period end with no rollover; one-time credits never expire. Credit transaction history is viewable. Payment success/failure communicated via modals.
-**FRs covered:** FR24, FR25, FR26, FR27, FR30, FR50, FR55, FR56, FR64
+### Epic 3: Billing & Credit Purchases — 6 stories (4 backend + 2 frontend)
+Payment provider integration (TBD: Stripe or Razorpay), one-time purchases, subscriptions (9 tiers), plan management, credit expiry, transaction history.
+**Backend:** Payment provider abstraction, checkout + webhooks, subscription lifecycle, credit expiry + history API
+**Frontend:** Billing page + checkout redirect, credit history page
+**API Contract:** 9 billing endpoints, pricing public endpoint, type mismatches (CreditTransaction types, PricingPlan structure)
+**FRs covered:** FR24–FR27, FR30, FR50, FR55, FR56, FR64
 **File:** [epic-03-billing.md](epics/epic-03-billing.md)
 
-### Epic 4: Bulk Email Verification — 5 stories
-Users can upload CSV/Excel files (up to 100K rows) or paste email lists for batch verification. Column mapping during upload. Real-time SSE progress updates (percentage, processed count, ETA). Downloadable results as CSV (full or filtered by status). Bulk job history with search and status filtering. File uploads create history records; paste verifications do not.
-**FRs covered:** FR16, FR17, FR18, FR19, FR20, FR21, FR48, FR49
+### Epic 4: Bulk Email Verification — 15 stories (5 backend + 10 frontend)
+CSV/Excel upload with column mapping, paste input, SSE real-time progress, CSV export, job history.
+**Backend:** File upload + parsing, paste processing, SSE progress endpoint, CSV generation + download, job history API
+**Frontend:** Upload/paste form wiring, SSE EventSource client, results display + history page
+**API Contract:** 6 bulk endpoints including SSE event schema, history pagination
+**FRs covered:** FR16–FR21, FR48, FR49
 **File:** [epic-04-bulk-verification.md](epics/epic-04-bulk-verification.md)
 
-### Epic 5: Public API & Webhooks — 6 stories
-Developers can integrate via the public REST API using ev_-prefixed API keys. Key management: create with configurable expiration, view masked list, delete with immediate revocation. API endpoints: single verify, bulk submit, bulk status/results, credit balance, webhooks CRUD. Webhook system delivers HMAC-SHA256 signed notifications for 4 event types with 4-attempt retry. Per-user rate limiting enforced by subscription tier. Usage history with filtering and export.
-**FRs covered:** FR32, FR33, FR34, FR35, FR36, FR37, FR38, FR39, FR40, FR41, FR42, FR46, FR47
+### Epic 5: Public API & Webhooks — 8 stories (6 backend + 2 frontend)
+API key management, public REST API (single verify, bulk, credits), webhook system with HMAC signing and retry, per-user rate limiting, usage history.
+**Backend:** API key CRUD, public API endpoints, webhook delivery + signing, rate limiting (Redis Lua), usage history + export
+**Frontend:** API key management page, usage history page
+**API Contract:** 15+ endpoints (internal key management + public API + webhooks + usage), type mismatches (ApiKey.type/security removal)
+**FRs covered:** FR32–FR42, FR46, FR47
 **File:** [epic-05-api-and-webhooks.md](epics/epic-05-api-and-webhooks.md)
 
-### Epic 6: Active Verification (ReachInbox Integration) — 4 stories
-Users can connect their ReachInbox account for continuous email list monitoring. Configure scheduled re-verification at 1h, 6h, 12h, or 24h intervals. View aggregated verification results across all connected data sources. Filter and search emails within active verification lists by status.
-**FRs covered:** FR51, FR52, FR53, FR54
+### Epic 6: Deliverability (Active Verification) — 8 stories (4 backend + 4 frontend)
+Generic/pluggable integration account connection (no vendor-specific implementation), scheduled re-verification, aggregated results, email filtering/search.
+**Backend:** Integration connection via `IntegrationProvider` interface + credential storage, scheduled BullMQ repeatable jobs, aggregation queries, cursor-paginated email search
+**Frontend:** Connection modal + schedule config, dashboard charts + email list with filters, export-to-integration flow, category breakdown cards
+**API Contract:** 6 active verification endpoints, type mismatches (Integration.status values)
+**FRs covered:** FR51–FR54
+**Decisions:** #11 (ReachInbox skipped — generic/pluggable), #12 (nav label: "Deliverability")
 **File:** [epic-06-active-verification.md](epics/epic-06-active-verification.md)
 
-### Epic 7: Landing Page & Public Pages — 2 stories
-Landing page with hero section (headline, subheadline, primary signup CTA), feature grid (6+ cards), integration logos bar, pricing table (9 subscription tiers with monthly/yearly prices), and footer with ToS and Privacy Policy links. Error pages for 404, 500, and VPN detection.
+### Epic 7: Landing Page & Public Pages — 3 stories (1 backend + 2 frontend)
+Pricing data API, VPN detection middleware, landing page pricing integration, error pages.
+**Backend:** Pricing data endpoint (shared with Epic 3), VPN detection middleware
+**Frontend:** Landing page pricing wiring (SSG), error pages + VPN detection redirect
+**API Contract:** Pricing endpoint (reuses Epic 3), VPN detection header
 **FRs covered:** FR62, FR63
 **File:** [epic-07-landing-and-public.md](epics/epic-07-landing-and-public.md)
+
+---
+
+## Decisions Record
+
+The following 13 decisions were made during the deep verification of epics against the frontend source code. All decisions are reflected in the epic files.
+
+| # | Decision | Value | Impacts |
+|---|----------|-------|---------|
+| 1 | Status enum | `valid \| invalid \| unknown \| risky \| disposable \| catch_all \| role` | All verification-related API contracts, `status-colors.ts`, all status badges |
+| 2 | Score range | 0–100 | `score-progress-bar.tsx`, mock data, API contracts |
+| 3 | API key prefix | `ek_` (`ek_live_`, `ek_test_`) | Epic 5, CLAUDE.md, architecture doc |
+| 4 | Billing cycle term | `annual` (not `yearly`) | Epic 3, Epic 7, all API contracts with `billingCycle` |
+| 5 | Payment provider | Abstract (adapter pattern) — `PaymentProvider` interface | Epic 3, `payment_customer_id` not `stripe_customer_id` |
+| 6 | Dashboard page | No — keep `/home` as redirect to `/home/quick-verify` | Epic 2 (Story 2.7 removed) |
+| 7 | `/home/usage` content | Credit history (not verification history) | Epic 5 (Story 5.8 rewritten) |
+| 8 | Extra 15 frontend components | Add stories to epics | Epics 1, 2, 4, 6 (new stories added) |
+| 9 | Brand name | **EmailKit** | Epic 7, landing page, layouts, metadata |
+| 10 | Bulk results route param | `jobId` (frontend renames `[listId]` → `[jobId]`) | Epic 4, route structure |
+| 11 | ReachInbox integration | Skip — make active verification generic/pluggable | Epic 6 (fully rewritten) |
+| 12 | Active verification nav label | **"Deliverability"** | Epic 6, sidebar navigation |
+| 13 | Credit history route | `/home/credit-history` (renamed from `/home/usage`) | Epic 5, navigation, sidebar |
+
+---
+
+## Architecture Updates Required
+
+The following discrepancies between `docs/architecture.md` and these epics were identified during cross-verification. The architecture doc should be updated before implementation begins:
+
+| # | Section | Issue | Source |
+|---|---------|-------|--------|
+| 1 | Section 12 — `users` table | Split `name` into `first_name` + `last_name` | Epic 1 |
+| 2 | Section 12 — `users` table | Add `deletion_requested_at` column (GDPR grace period) | Epic 1 |
+| 3 | Section 12 — `users` table | Rename `stripe_customer_id` → `payment_customer_id` | Decision #5 |
+| 4 | Section 12 — `bulk_jobs` table | Add `source_type` and `file_name` columns (FR21) | Epic 4 |
+| 5 | Section 12 — Tables list | Add `integrations` and `integration_emails` tables (11 total, not 9) | Epic 6 |
+| 6 | Section 7 — OAuth callback | Change `POST /auth/callback/google` to `GET` (standard OAuth redirect) | Epic 1 |
+| 7 | Section 2 — Rate limits | Expand from 6 tiers to 9 + Free (add Popular, Ultimate, Mega) | Epic 5 |
+| 8 | Public API endpoints | Remove `GET /api/v1/usage` — not in PRD, usage is internal only | Epic 5 |
+| 9 | API key prefix | Change `sk_` → `ek_` (`ek_live_`, `ek_test_`) | Decision #3 |
+| 10 | Status enum | Standardize to `valid \| invalid \| unknown \| risky \| disposable \| catch_all \| role` | Decision #1 |
+| 11 | Score range | Explicitly state 0–100 | Decision #2 |
+| 12 | Billing cycle | Use `annual` not `yearly` | Decision #4 |
+| 13 | Payment provider | Abstract — no Stripe-specific references | Decision #5 |
+| 14 | Dashboard page | Remove dashboard page reference — `/home` is redirect to `/home/quick-verify` | Decision #6 |
+| 15 | Integration | Remove ReachInbox-specific references — generic `IntegrationProvider` interface | Decision #11 |
+| 16 | Route table | Rename `/home/usage` → `/home/credit-history` | Decision #13 |
