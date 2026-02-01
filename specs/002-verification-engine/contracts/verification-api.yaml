@@ -1,0 +1,272 @@
+openapi: 3.0.0
+info:
+  title: EmailKit Verification API
+  version: 1.0.0
+  description: Internal verification endpoints for web dashboard (session cookie auth)
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://api.emailkit.com
+    description: Production
+
+paths:
+  /home/quick-verify:
+    post:
+      summary: Verify single email address
+      description: Submit an email for verification and receive detailed results
+      operationId: verifySingleEmail
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@example.com"
+                  description: Email address to verify
+      responses:
+        '200':
+          description: Verification successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationResponse'
+        '401':
+          description: Unauthorized (no valid session)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '402':
+          description: Insufficient credits
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                  - credits
+                properties:
+                  error:
+                    type: string
+                    example: "Insufficient credits"
+                  credits:
+                    type: integer
+                    example: 0
+        '422':
+          description: Invalid email format
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid email format"
+        '503':
+          description: Service temporarily unavailable (load shedding)
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Number of seconds to wait before retrying
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - error
+                  - retryAfter
+                properties:
+                  error:
+                    type: string
+                    example: "Service temporarily unavailable"
+                  retryAfter:
+                    type: integer
+                    description: Retry after this many seconds
+                    example: 30
+
+  /home/quick-verify/recent:
+    get:
+      summary: Get last 10 verification results
+      description: Retrieve the user's 10 most recent verification results in reverse chronological order
+      operationId: getRecentVerifications
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Recent results retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - results
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VerificationResult'
+                    maxItems: 10
+                    description: Up to 10 most recent verification results
+        '401':
+          description: Unauthorized (no valid session)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ev.session_token
+      description: Session cookie from Better Auth
+
+  schemas:
+    VerificationResponse:
+      type: object
+      required:
+        - result
+        - credits
+      properties:
+        result:
+          $ref: '#/components/schemas/VerificationResult'
+        credits:
+          type: integer
+          description: Remaining credit balance after this verification
+          example: 99
+          minimum: 0
+
+    VerificationResult:
+      type: object
+      required:
+        - id
+        - email
+        - status
+        - score
+        - deliverable
+        - reason
+        - domain
+        - attributes
+        - serverInfo
+        - verifiedAt
+      properties:
+        id:
+          type: string
+          example: "12345"
+          description: Unique verification result ID
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+          description: Email address that was verified
+        status:
+          type: string
+          enum:
+            - valid
+            - invalid
+            - unknown
+            - risky
+            - disposable
+            - catch_all
+            - role
+          description: Verification status category
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 85
+          description: Risk/reputation score (0=highest risk, 100=lowest risk)
+        deliverable:
+          type: boolean
+          example: true
+          description: Whether the email is deliverable
+        reason:
+          type: string
+          example: "Email exists and is deliverable"
+          description: Human-readable explanation of the status
+        domain:
+          type: string
+          example: "example.com"
+          description: Domain part of the email address
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailAttribute'
+          description: Detailed attributes about the email
+        serverInfo:
+          $ref: '#/components/schemas/ServerInfo'
+        verifiedAt:
+          type: string
+          format: date-time
+          example: "2026-02-01T12:00:00Z"
+          description: ISO 8601 timestamp of when verification was performed
+
+    EmailAttribute:
+      type: object
+      required:
+        - name
+        - value
+        - score
+        - checked
+      properties:
+        name:
+          type: string
+          enum:
+            - is_role
+            - is_free
+            - is_disposable
+            - is_catchall
+          description: Attribute identifier
+        value:
+          type: string
+          enum:
+            - 'true'
+            - 'false'
+          description: Attribute value as string
+        score:
+          type: string
+          enum:
+            - high
+            - medium
+            - low
+          description: Risk level for this attribute
+        checked:
+          type: boolean
+          description: Whether this attribute was successfully checked
+
+    ServerInfo:
+      type: object
+      required:
+        - smtpProvider
+        - mxRecords
+      properties:
+        smtpProvider:
+          type: string
+          example: "Google"
+          description: SMTP provider name (e.g., Google, Microsoft)
+        mxRecords:
+          type: string
+          example: "mx1.google.com, mx2.google.com"
+          description: Comma-separated MX record hostnames
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message

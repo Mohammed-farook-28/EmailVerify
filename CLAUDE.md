@@ -122,6 +122,7 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 ## Active Technologies
 - TypeScript 5.x (Node.js 20+ for backend, Next.js 15+ for frontend) (001-user-auth)
 - PostgreSQL 16+ (users, sessions, credit_events tables), Redis 7+ (rate limiting, credit cache), DigitalOcean Spaces (avatars) (001-user-auth)
+- TypeScript 5.x (Node.js 20+ backend, Next.js 15+ frontend) (002-verification-engine)
 
 ## Recent Changes
 - 001-user-auth: Added TypeScript 5.x (Node.js 20+ for backend, Next.js 15+ for frontend)

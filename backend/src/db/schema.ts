@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, integer } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, integer, jsonb, real, index } from 'drizzle-orm/pg-core';
 
 // Better Auth Core Tables
 
@@ -85,6 +85,29 @@ export const billingInfo = pgTable('billing_info', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });
 
+export const verificationResult = pgTable(
+  'verification_result',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    status: text('status').notNull(), // 'valid', 'invalid', 'risky', 'unknown'
+    score: real('score').notNull(), // 0.0 to 1.0
+    deliverability: text('deliverability').notNull(), // 'deliverable', 'undeliverable', 'risky', 'unknown'
+    attributes: jsonb('attributes').notNull(), // { disposable, freeProvider, roleAccount, catchAll, mxRecordsFound, smtpValid }
+    serverInfo: jsonb('server_info').notNull(), // { processingTime, requestId, timestamp }
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdCreatedAtIdx: index('verification_result_user_id_created_at_idx').on(
+      table.userId,
+      table.createdAt
+    ),
+  })
+);
+
 // Type exports for use in application code
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;
@@ -95,3 +118,5 @@ export type CreditEvent = typeof creditEvent.$inferSelect;
 export type NewCreditEvent = typeof creditEvent.$inferInsert;
 export type BillingInfo = typeof billingInfo.$inferSelect;
 export type NewBillingInfo = typeof billingInfo.$inferInsert;
+export type VerificationResult = typeof verificationResult.$inferSelect;
+export type NewVerificationResult = typeof verificationResult.$inferInsert;

@@ -1,0 +1,194 @@
+openapi: 3.0.0
+info:
+  title: EmailKit Dashboard API
+  version: 1.0.0
+  description: Dashboard metrics and analytics endpoints (session cookie auth)
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://api.emailkit.com
+    description: Production
+
+paths:
+  /home:
+    get:
+      summary: Get dashboard metrics
+      description: Retrieve aggregated metrics for dashboard display (summary, distribution, trend data)
+      operationId: getDashboardMetrics
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [7, 30, 90]
+            default: 30
+          description: Time range in days for metrics calculation
+      responses:
+        '200':
+          description: Dashboard metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardMetrics'
+        '401':
+          description: Unauthorized (no valid session)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ev.session_token
+      description: Session cookie from Better Auth
+
+  schemas:
+    DashboardMetrics:
+      type: object
+      required:
+        - summary
+        - distribution
+        - trend
+      properties:
+        summary:
+          $ref: '#/components/schemas/Summary'
+        distribution:
+          $ref: '#/components/schemas/Distribution'
+        trend:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrendDataPoint'
+          description: Daily verification counts over the requested time range
+
+    Summary:
+      type: object
+      required:
+        - credits
+        - totalVerifications
+        - totalApiCalls
+        - periodVerifications
+      properties:
+        credits:
+          type: integer
+          example: 1500
+          description: Current credit balance
+          minimum: 0
+        totalVerifications:
+          type: integer
+          example: 5420
+          description: Total lifetime verifications
+          minimum: 0
+        totalApiCalls:
+          type: integer
+          example: 0
+          description: Total API calls (placeholder for future epic)
+          minimum: 0
+        periodVerifications:
+          type: integer
+          example: 342
+          description: Verifications in the selected time range
+          minimum: 0
+
+    Distribution:
+      type: object
+      required:
+        - valid
+        - invalid
+        - unknown
+        - risky
+        - disposable
+        - catchAll
+        - role
+      properties:
+        valid:
+          type: integer
+          example: 150
+          description: Count of valid email results
+          minimum: 0
+        invalid:
+          type: integer
+          example: 45
+          description: Count of invalid email results
+          minimum: 0
+        unknown:
+          type: integer
+          example: 12
+          description: Count of unknown status results
+          minimum: 0
+        risky:
+          type: integer
+          example: 8
+          description: Count of risky email results
+          minimum: 0
+        disposable:
+          type: integer
+          example: 23
+          description: Count of disposable email results
+          minimum: 0
+        catchAll:
+          type: integer
+          example: 5
+          description: Count of catch-all email results
+          minimum: 0
+        role:
+          type: integer
+          example: 7
+          description: Count of role-based email results
+          minimum: 0
+
+    TrendDataPoint:
+      type: object
+      required:
+        - date
+        - count
+        - valid
+        - invalid
+        - unknown
+        - risky
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-02-01"
+          description: Date in YYYY-MM-DD format
+        count:
+          type: integer
+          example: 45
+          description: Total verifications on this date
+          minimum: 0
+        valid:
+          type: integer
+          example: 30
+          description: Valid verifications on this date
+          minimum: 0
+        invalid:
+          type: integer
+          example: 10
+          description: Invalid verifications on this date
+          minimum: 0
+        unknown:
+          type: integer
+          example: 3
+          description: Unknown status verifications on this date
+          minimum: 0
+        risky:
+          type: integer
+          example: 2
+          description: Risky verifications on this date
+          minimum: 0
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message

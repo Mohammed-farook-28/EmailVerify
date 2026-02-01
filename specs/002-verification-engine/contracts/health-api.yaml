@@ -1,0 +1,192 @@
+openapi: 3.0.0
+info:
+  title: EmailKit Health & Metrics API
+  version: 1.0.0
+  description: Health check and Prometheus metrics endpoints (unauthenticated for K8s probes)
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://api.emailkit.com
+    description: Production
+
+paths:
+  /health/live:
+    get:
+      summary: Liveness probe
+      description: Returns 200 if the process is running (always succeeds unless process is dead)
+      operationId: checkLiveness
+      security: []
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                    example: "ok"
+
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: Returns 200 only when both PostgreSQL and Redis are connected and ready
+      operationId: checkReadiness
+      security: []
+      responses:
+        '200':
+          description: Service is ready to accept traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - postgres
+                  - redis
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                    example: "ok"
+                  postgres:
+                    type: string
+                    enum: [connected]
+                    example: "connected"
+                  redis:
+                    type: string
+                    enum: [connected]
+                    example: "connected"
+        '503':
+          description: Service is not ready (dependency unavailable)
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - postgres
+                  - redis
+                properties:
+                  status:
+                    type: string
+                    enum: [degraded]
+                    example: "degraded"
+                  postgres:
+                    type: string
+                    enum: [connected, disconnected]
+                    example: "connected"
+                  redis:
+                    type: string
+                    enum: [connected, disconnected]
+                    example: "disconnected"
+
+  /health/startup:
+    get:
+      summary: Startup probe
+      description: Returns 200 only after workers are connected to the queue (initialization complete)
+      operationId: checkStartup
+      security: []
+      responses:
+        '200':
+          description: Application has successfully started
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - workers
+                  - queue
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                    example: "ok"
+                  workers:
+                    type: string
+                    enum: [connected]
+                    example: "connected"
+                    description: Workers connected to BullMQ queue
+                  queue:
+                    type: string
+                    enum: [ready]
+                    example: "ready"
+                    description: Queue is ready to accept jobs
+        '503':
+          description: Application is still starting up
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - workers
+                  - queue
+                properties:
+                  status:
+                    type: string
+                    enum: [initializing]
+                    example: "initializing"
+                  workers:
+                    type: string
+                    enum: [connecting, connected]
+                    example: "connecting"
+                  queue:
+                    type: string
+                    enum: [initializing, ready]
+                    example: "initializing"
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: Returns metrics in Prometheus text format for scraping
+      operationId: getMetrics
+      security: []
+      responses:
+        '200':
+          description: Metrics in Prometheus exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP queue_depth_total Total number of jobs in the queue
+                  # TYPE queue_depth_total gauge
+                  queue_depth_total 1234
+
+                  # HELP upstream_error_rate Rate of upstream API errors
+                  # TYPE upstream_error_rate gauge
+                  upstream_error_rate{status="5xx"} 0.02
+
+                  # HELP circuit_breaker_state Circuit breaker state (0=CLOSED, 1=HALF_OPEN, 2=OPEN)
+                  # TYPE circuit_breaker_state gauge
+                  circuit_breaker_state 0
+
+                  # HELP redis_memory_usage_percent Redis memory usage percentage
+                  # TYPE redis_memory_usage_percent gauge
+                  redis_memory_usage_percent 45.2
+
+                  # HELP credit_reconciliation_drift Credit balance drift detected during reconciliation
+                  # TYPE credit_reconciliation_drift gauge
+                  credit_reconciliation_drift 3
+
+                  # HELP dlq_depth Dead letter queue depth
+                  # TYPE dlq_depth gauge
+                  dlq_depth 15
+
+                  # HELP worker_concurrency_utilization Worker concurrency utilization percentage
+                  # TYPE worker_concurrency_utilization gauge
+                  worker_concurrency_utilization 67.5
+
+                  # HELP http_503_rate Rate of HTTP 503 responses (load shedding)
+                  # TYPE http_503_rate counter
+                  http_503_rate 12
+
+components:
+  schemas: {}

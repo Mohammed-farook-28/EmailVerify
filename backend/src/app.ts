@@ -9,11 +9,18 @@ import { errorHandler } from './middleware/error-handler.js';
 import { auth } from './lib/auth.js';
 import { profileRoutes } from './routes/profile.js';
 import { userRoutes } from './routes/user.js';
+import healthRoutes from './routes/health.js';
+import verificationRoutes from './routes/verification.js';
+import dashboardRoutes from './routes/dashboard.js';
+import { metricsMiddleware } from './lib/metrics.js';
+import { expressLogger } from './config/logger.js';
 
 const app = express();
 
 app.use(helmet());
 app.use(logger);
+app.use(expressLogger()); // Pino request logger
+app.use(metricsMiddleware()); // Prometheus metrics
 app.use(
   cors({
     origin: env.frontendUrl,
@@ -31,14 +38,14 @@ app.all('/api/auth/*', toNodeHandler(auth));
 // Now safe to add JSON parser
 app.use(express.json());
 
+// Health and metrics endpoints (no auth required)
+app.use('/health', healthRoutes);
+
 // Custom routes
 app.use('/api/user', userRoutes);
 app.use('/home/profile', profileRoutes);
-
-// Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' });
-});
+app.use('/home', verificationRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Error handler (must be last)
 app.use(errorHandler);
