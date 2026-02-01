@@ -1,0 +1,437 @@
+openapi: 3.1.0
+info:
+  title: EmailKit Auth API
+  version: 1.0.0
+  description: Authentication endpoints for EmailKit platform
+
+paths:
+  /auth/sign-up:
+    post:
+      summary: Register a new account with email/password
+      operationId: signUp
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firstName, lastName, email, password, terms]
+              properties:
+                firstName:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                lastName:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                email:
+                  type: string
+                  format: email
+                  maxLength: 255
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                terms:
+                  type: boolean
+                  const: true
+      responses:
+        '201':
+          description: Account created, verification code sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Verification code sent to your email"
+                  userId:
+                    type: string
+                    format: uuid
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Rate limited (3/hr per IP)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitError'
+
+  /auth/verify-email:
+    post:
+      summary: Verify email with 6-digit code
+      operationId: verifyEmail
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, code]
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                code:
+                  type: string
+                  pattern: '^\d{6}$'
+      responses:
+        '200':
+          description: Email verified, session created
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "ev_session=<token>; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid code
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid code"
+                  attemptsRemaining:
+                    type: integer
+        '410':
+          description: Code expired
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Code expired"
+                  action:
+                    type: string
+                    example: "resend"
+
+  /auth/resend-verification:
+    post:
+      summary: Resend email verification code
+      operationId: resendVerification
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Code sent if account exists and is unverified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "If the account exists and is unverified, a new code has been sent"
+        '429':
+          description: Rate limited (3/hr per userId)
+
+  /auth/sign-in:
+    post:
+      summary: Sign in with email/password
+      operationId: signIn
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Signed in, session created
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid credentials (generic, no email enumeration)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Email not verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Email not verified"
+                  action:
+                    type: string
+                    example: "verify_email"
+                  userId:
+                    type: string
+                    format: uuid
+        '429':
+          description: Account locked (5 attempts/15min, 30-minute lockout)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Account temporarily locked"
+                  retryAfter:
+                    type: integer
+                    example: 1800
+
+  /auth/sign-out:
+    post:
+      summary: Sign out (destroy current session)
+      operationId: signOut
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Signed out
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "ev_session=; Max-Age=0"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Signed out"
+
+  /auth/google:
+    get:
+      summary: Initiate Google OAuth flow
+      operationId: googleAuth
+      tags: [Authentication]
+      security: []
+      responses:
+        '302':
+          description: Redirect to Google OAuth consent screen
+
+  /auth/callback/google:
+    get:
+      summary: Google OAuth callback
+      operationId: googleCallback
+      tags: [Authentication]
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to frontend
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "/auth/callback?success=true"
+            Set-Cookie:
+              schema:
+                type: string
+
+  /auth/password-reset:
+    post:
+      summary: Request password reset code
+      operationId: requestPasswordReset
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Always returns success (no email enumeration)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "If an account exists, a reset code has been sent"
+        '429':
+          description: Rate limited (3/hr per email)
+
+  /auth/password-reset/verify:
+    post:
+      summary: Verify reset code and set new password
+      operationId: verifyPasswordReset
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, newPassword]
+              properties:
+                email:
+                  type: string
+                  format: email
+                code:
+                  type: string
+                  pattern: '^\d{6}$'
+                newPassword:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+      responses:
+        '200':
+          description: Password updated, new session created
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid code
+        '410':
+          description: Code expired
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ev_session
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+          format: email
+        plan:
+          type: string
+          example: "Free"
+        credits:
+          type: integer
+        avatarUrl:
+          type: string
+          nullable: true
+        language:
+          type: string
+          example: "en"
+        emailVerified:
+          type: boolean
+        googleLinked:
+          type: boolean
+        deletionRequestedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+    ValidationError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Validation failed"
+        details:
+          type: object
+          additionalProperties:
+            type: string
+
+    RateLimitError:
+      type: object
+      properties:
+        error:
+          type: string
+        retryAfter:
+          type: integer

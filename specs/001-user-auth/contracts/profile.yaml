@@ -1,0 +1,445 @@
+openapi: 3.1.0
+info:
+  title: EmailKit Profile API
+  version: 1.0.0
+  description: Profile management endpoints for EmailKit platform
+
+paths:
+  /home/profile:
+    get:
+      summary: Get current user profile
+      operationId: getProfile
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: 'auth.yaml#/components/schemas/User'
+        '401':
+          description: Not authenticated
+
+    delete:
+      summary: Request account deletion (30-day grace period)
+      operationId: deleteAccount
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, confirmationCode]
+              properties:
+                password:
+                  type: string
+                  description: Current password (for password users) or omit for Google-only users
+                confirmationCode:
+                  type: string
+                  pattern: '^\d{6}$'
+      responses:
+        '200':
+          description: Deletion scheduled
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: "ev_session=; Max-Age=0"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Account deletion scheduled. You have 30 days to cancel by signing in."
+        '401':
+          description: Incorrect password or invalid code
+
+  /home/profile/name:
+    put:
+      summary: Update user name
+      operationId: updateName
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firstName, lastName]
+              properties:
+                firstName:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                lastName:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+      responses:
+        '200':
+          description: Name updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: 'auth.yaml#/components/schemas/User'
+
+  /home/profile/email:
+    put:
+      summary: Initiate email change (requires re-authentication)
+      operationId: updateEmail
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newEmail, password]
+              properties:
+                newEmail:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  description: Current password for re-authentication
+      responses:
+        '200':
+          description: Verification code sent to new email
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Verification code sent to new email"
+        '401':
+          description: Incorrect password
+        '409':
+          description: Email already in use
+
+  /home/profile/email/verify:
+    post:
+      summary: Confirm email change with verification code
+      operationId: verifyEmailChange
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  pattern: '^\d{6}$'
+      responses:
+        '200':
+          description: Email updated, session token rotated
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: 'auth.yaml#/components/schemas/User'
+
+  /home/profile/password:
+    put:
+      summary: Change password (requires current password)
+      operationId: updatePassword
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword:
+                  type: string
+                newPassword:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+      responses:
+        '200':
+          description: Password updated, other sessions invalidated
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Password updated"
+        '401':
+          description: Incorrect current password
+
+  /home/profile/language:
+    put:
+      summary: Update language preference
+      operationId: updateLanguage
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [language]
+              properties:
+                language:
+                  type: string
+                  enum: [en]
+      responses:
+        '200':
+          description: Language updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: 'auth.yaml#/components/schemas/User'
+
+  /home/profile/avatar:
+    post:
+      summary: Upload profile avatar
+      operationId: uploadAvatar
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [avatar]
+              properties:
+                avatar:
+                  type: string
+                  format: binary
+                  description: "JPG, PNG, or GIF; max 5MB"
+      responses:
+        '200':
+          description: Avatar uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  avatarUrl:
+                    type: string
+                    format: uri
+        '413':
+          description: File too large (max 5MB)
+        '415':
+          description: Unsupported file type
+
+  /home/profile/export:
+    get:
+      summary: Export all personal data (GDPR Article 20)
+      operationId: exportData
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: User data export
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profile:
+                    $ref: 'auth.yaml#/components/schemas/User'
+                  verifications:
+                    type: array
+                    items:
+                      type: object
+                  credits:
+                    type: array
+                    items:
+                      type: object
+                  apiKeys:
+                    type: array
+                    items:
+                      type: object
+                  webhooks:
+                    type: array
+                    items:
+                      type: object
+
+  /home/profile/deletion-code:
+    post:
+      summary: Request account deletion confirmation code
+      operationId: requestDeletionCode
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password:
+                  type: string
+                  description: Current password (for password users) or omit for Google-only users
+      responses:
+        '200':
+          description: Deletion confirmation code sent to user's email
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Deletion confirmation code sent to your email"
+        '401':
+          description: Incorrect password or re-authentication required
+        '429':
+          description: Rate limited
+
+  /home/profile/billing-info:
+    get:
+      summary: Get billing address information
+      operationId: getBillingInfo
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Billing info (empty object if none set)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  address:
+                    type: string
+                  city:
+                    type: string
+                  state:
+                    type: string
+                  postalCode:
+                    type: string
+                  country:
+                    type: string
+        '401':
+          description: Not authenticated
+    put:
+      summary: Update billing address information
+      operationId: updateBillingInfo
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: string
+                  maxLength: 500
+                city:
+                  type: string
+                  maxLength: 255
+                state:
+                  type: string
+                  maxLength: 255
+                postalCode:
+                  type: string
+                  maxLength: 20
+                country:
+                  type: string
+                  maxLength: 100
+      responses:
+        '200':
+          description: Billing info updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Billing information updated"
+
+  /home/profile/data-retention:
+    put:
+      summary: Update data retention preference
+      operationId: updateDataRetention
+      tags: [Profile]
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [retentionDays]
+              properties:
+                retentionDays:
+                  type: integer
+                  enum: [7, 14, 30, 60, 90]
+      responses:
+        '200':
+          description: Data retention preference updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Data retention updated"
+                  retentionDays:
+                    type: integer
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ev_session
