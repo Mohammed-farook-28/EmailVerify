@@ -94,6 +94,20 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 - `/auth/*` — Google OAuth
 - `/home/*` — Quick-verify, bulk-verify, api-keys, credit-history, billing, profile, active-verification
 
+**Billing API** (session cookie auth):
+- `POST /api/billing/checkout/one-time` — Create one-time purchase checkout
+- `POST /api/billing/checkout/subscription` — Create subscription checkout
+- `GET /api/billing/checkout/status/:sessionId` — Poll checkout status
+- `GET /api/billing/info` — Get balance and subscription info
+- `GET /api/billing/transactions` — Get transaction history (paginated)
+- `GET /api/billing/transactions/export` — Export transactions as CSV
+- `POST /api/billing/subscription/change` — Upgrade/downgrade subscription
+- `POST /api/billing/subscription/cancel` — Cancel subscription
+- `POST /api/billing/subscription/reactivate` — Reactivate subscription
+- `GET /api/billing/packages` — List credit packages (public)
+- `GET /api/billing/plans` — List subscription plans (public)
+- `POST /api/billing/webhook` — Stripe webhook endpoint (Stripe only)
+
 ## Key Design Decisions
 
 - **BullMQ Pro** over SQS/RabbitMQ/Kafka: TypeScript-native, built-in multi-tenant groups, no extra infra beyond Redis
@@ -101,6 +115,10 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 - **Redis + PostgreSQL hybrid** for credits: speed on the hot path, ACID durability for audit
 - **SSE over WebSockets** for real-time: simpler, auto-reconnect, sufficient for progress updates
 - **Redis config**: `maxmemory-policy: noeviction`, `appendonly: yes`, `removeOnComplete: true` on all jobs — BullMQ breaks without these
+- **Stripe** for payments: Supports one-time purchases (9 packages: 1K-1M credits) and subscriptions (5 tiers × 2 billing cycles = 10 plans)
+- **PaymentProvider abstraction**: Interface layer allows future integration of Razorpay or other payment gateways
+- **Idempotency-first**: All credit operations and webhook events use unique idempotency keys to prevent duplicates
+- **Subscription credits expire**: Subscription credits expire at period end, one-time purchase credits never expire
 
 ## Dashboard Routes
 
@@ -123,6 +141,8 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 - TypeScript 5.x (Node.js 20+ for backend, Next.js 15+ for frontend) (001-user-auth)
 - PostgreSQL 16+ (users, sessions, credit_events tables), Redis 7+ (rate limiting, credit cache), DigitalOcean Spaces (avatars) (001-user-auth)
 - TypeScript 5.x (Node.js 20+ backend, Next.js 15+ frontend) (002-verification-engine)
+- Stripe SDK 20.x (payment processing, subscriptions, webhooks) (003-billing)
 
 ## Recent Changes
 - 001-user-auth: Added TypeScript 5.x (Node.js 20+ for backend, Next.js 15+ for frontend)
+- 003-billing: Integrated Stripe for one-time purchases and subscriptions, added webhook handlers, subscription renewal worker

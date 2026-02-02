@@ -64,12 +64,13 @@ export const creditEvent = pgTable('credit_event', {
   userId: text('user_id')
     .notNull()
     .references(() => user.id, { onDelete: 'cascade' }),
-  type: text('type').notNull(), // 'signup_bonus', 'purchase', 'verification_used', etc.
+  type: text('type').notNull(), // 'signup_bonus', 'purchase', 'subscription', 'subscription_renewal', 'expire', 'verification_used', etc.
   amount: integer('amount').notNull(), // Positive for credits, negative for deductions
   balanceAfter: integer('balance_after').notNull(),
-  referenceType: text('reference_type'), // 'verification_job', 'payment', etc.
+  referenceType: text('reference_type'), // 'verification_job', 'payment', 'subscription', 'checkout_session', etc.
   referenceId: text('reference_id'),
   idempotencyKey: text('idempotency_key').unique(),
+  metadata: jsonb('metadata'), // Additional context (e.g., package, plan, expiration date)
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -108,6 +109,46 @@ export const verificationResult = pgTable(
   })
 );
 
+// Subscription table - tracks user subscriptions
+export const subscription = pgTable('subscription', {
+  id: text('id').primaryKey(),
+  userId: text('user_id')
+    .notNull()
+    .unique() // One subscription per user
+    .references(() => user.id, { onDelete: 'cascade' }),
+  stripeSubscriptionId: text('stripe_subscription_id').notNull().unique(),
+  stripePriceId: text('stripe_price_id').notNull(), // Current price ID
+  planId: text('plan_id').notNull(), // e.g., 'starter-monthly', 'pro-annual'
+  status: text('status').notNull(), // 'active', 'past_due', 'canceled', 'incomplete', 'trialing', 'unpaid'
+  currentPeriodStart: timestamp('current_period_start').notNull(),
+  currentPeriodEnd: timestamp('current_period_end').notNull(),
+  cancelAtPeriodEnd: boolean('cancel_at_period_end').notNull().default(false),
+  canceledAt: timestamp('canceled_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+// Checkout session tracking - for polling and reconciliation
+export const checkoutSession = pgTable('checkout_session', {
+  id: text('id').primaryKey(), // Stripe session ID
+  userId: text('user_id')
+    .notNull()
+    .references(() => user.id, { onDelete: 'cascade' }),
+  type: text('type').notNull(), // 'one_time_purchase' or 'subscription'
+  status: text('status').notNull(), // 'open', 'complete', 'expired'
+  paymentStatus: text('payment_status').notNull(), // 'paid', 'unpaid', 'no_payment_required'
+  metadata: jsonb('metadata').notNull(), // { packageId, planId, priceId, etc. }
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  completedAt: timestamp('completed_at'),
+});
+
+// Webhook event idempotency - prevent duplicate processing
+export const processedWebhookEvent = pgTable('processed_webhook_event', {
+  id: text('id').primaryKey(), // Stripe event ID
+  type: text('type').notNull(), // Event type (e.g., 'checkout.session.completed')
+  processedAt: timestamp('processed_at').notNull().defaultNow(),
+});
+
 // Type exports for use in application code
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;
@@ -120,3 +161,9 @@ export type BillingInfo = typeof billingInfo.$inferSelect;
 export type NewBillingInfo = typeof billingInfo.$inferInsert;
 export type VerificationResult = typeof verificationResult.$inferSelect;
 export type NewVerificationResult = typeof verificationResult.$inferInsert;
+export type Subscription = typeof subscription.$inferSelect;
+export type NewSubscription = typeof subscription.$inferInsert;
+export type CheckoutSession = typeof checkoutSession.$inferSelect;
+export type NewCheckoutSession = typeof checkoutSession.$inferInsert;
+export type ProcessedWebhookEvent = typeof processedWebhookEvent.$inferSelect;
+export type NewProcessedWebhookEvent = typeof processedWebhookEvent.$inferInsert;

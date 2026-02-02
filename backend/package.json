@@ -12,6 +12,7 @@
     "workers:dlq": "tsx src/workers/dlq-handler.ts",
     "workers:reconcile": "tsx src/workers/reconciliation-worker.ts",
     "workers:cleanup": "tsx src/workers/retention-cleanup-worker.ts",
+    "workers:subscription-renewal": "tsx src/workers/subscription-renewal-worker.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
@@ -48,6 +49,7 @@
     "prom-client": "^15.1.3",
     "resend": "^4.0.0",
     "sharp": "^0.33.5",
+    "stripe": "^20.3.0",
     "undici": "^7.19.2",
     "zod": "^3.24.0"
   },

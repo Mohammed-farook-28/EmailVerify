@@ -138,3 +138,162 @@ export async function refundCredits(
 
   return newBalance;
 }
+
+/**
+ * Add credits from one-time purchase
+ *
+ * @param userId - User ID
+ * @param amount - Number of credits to add (positive number)
+ * @param packageId - Package identifier (e.g., "1K", "5K", "10K")
+ * @param checkoutSessionId - Stripe checkout session ID
+ * @returns New balance after addition
+ */
+export async function addPurchaseCredits(
+  userId: string,
+  amount: number,
+  packageId: string,
+  checkoutSessionId: string
+): Promise<number> {
+  const idempotencyKey = `purchase:${checkoutSessionId}`;
+
+  // Check if already processed (idempotency)
+  const existing = await db
+    .select()
+    .from(creditEvent)
+    .where(eq(creditEvent.idempotencyKey, idempotencyKey))
+    .limit(1);
+
+  if (existing.length > 0) {
+    // Already processed, return current balance
+    return existing[0].balanceAfter;
+  }
+
+  const currentBalance = await getBalance(userId);
+  const newBalance = currentBalance + amount;
+
+  // Create credit event
+  await db.insert(creditEvent).values({
+    id: nanoid(),
+    userId,
+    type: 'purchase',
+    amount: amount,
+    balanceAfter: newBalance,
+    referenceType: 'checkout_session',
+    referenceId: checkoutSessionId,
+    idempotencyKey,
+    metadata: { packageId },
+    createdAt: new Date(),
+  });
+
+  // Update Redis cache
+  await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+  return newBalance;
+}
+
+/**
+ * Add credits from subscription (monthly/annual allocation)
+ *
+ * @param userId - User ID
+ * @param amount - Number of credits to add (positive number)
+ * @param planId - Plan identifier (e.g., "starter-monthly", "pro-annual")
+ * @param subscriptionId - Stripe subscription ID
+ * @param periodEnd - When these credits expire (subscription period end)
+ * @returns New balance after addition
+ */
+export async function addSubscriptionCredits(
+  userId: string,
+  amount: number,
+  planId: string,
+  subscriptionId: string,
+  periodEnd: Date
+): Promise<number> {
+  // Idempotency key includes period end to allow multiple renewals
+  const idempotencyKey = `subscription:${subscriptionId}:${periodEnd.getTime()}`;
+
+  // Check if already processed (idempotency)
+  const existing = await db
+    .select()
+    .from(creditEvent)
+    .where(eq(creditEvent.idempotencyKey, idempotencyKey))
+    .limit(1);
+
+  if (existing.length > 0) {
+    // Already processed, return current balance
+    return existing[0].balanceAfter;
+  }
+
+  const currentBalance = await getBalance(userId);
+  const newBalance = currentBalance + amount;
+
+  // Create credit event
+  await db.insert(creditEvent).values({
+    id: nanoid(),
+    userId,
+    type: 'subscription',
+    amount: amount,
+    balanceAfter: newBalance,
+    referenceType: 'subscription',
+    referenceId: subscriptionId,
+    idempotencyKey,
+    metadata: { planId, expiresAt: periodEnd.toISOString() },
+    createdAt: new Date(),
+  });
+
+  // Update Redis cache
+  await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+  return newBalance;
+}
+
+/**
+ * Expire subscription credits at end of billing period
+ *
+ * @param userId - User ID
+ * @param amount - Number of credits to expire (positive number)
+ * @param subscriptionId - Stripe subscription ID
+ * @param periodEnd - The period that just ended
+ * @returns New balance after expiration
+ */
+export async function expireSubscriptionCredits(
+  userId: string,
+  amount: number,
+  subscriptionId: string,
+  periodEnd: Date
+): Promise<number> {
+  const idempotencyKey = `expire:${subscriptionId}:${periodEnd.getTime()}`;
+
+  // Check if already processed (idempotency)
+  const existing = await db
+    .select()
+    .from(creditEvent)
+    .where(eq(creditEvent.idempotencyKey, idempotencyKey))
+    .limit(1);
+
+  if (existing.length > 0) {
+    // Already processed, return current balance
+    return existing[0].balanceAfter;
+  }
+
+  const currentBalance = await getBalance(userId);
+  const newBalance = Math.max(0, currentBalance - amount); // Don't go negative
+
+  // Create credit event
+  await db.insert(creditEvent).values({
+    id: nanoid(),
+    userId,
+    type: 'expire',
+    amount: -amount, // Negative for expiration
+    balanceAfter: newBalance,
+    referenceType: 'subscription',
+    referenceId: subscriptionId,
+    idempotencyKey,
+    metadata: { periodEnd: periodEnd.toISOString() },
+    createdAt: new Date(),
+  });
+
+  // Update Redis cache
+  await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+  return newBalance;
+}

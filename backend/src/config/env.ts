@@ -40,6 +40,11 @@ export const env = {
 
   signupBonusCredits: parseInt(optional('SIGNUP_BONUS_CREDITS', '100'), 10),
 
+  // Stripe
+  stripeSecretKey: required('STRIPE_SECRET_KEY'),
+  stripePublishableKey: required('STRIPE_PUBLISHABLE_KEY'),
+  stripeWebhookSecret: required('STRIPE_WEBHOOK_SECRET'),
+
   get isDevelopment() {
     return this.nodeEnv === 'development';
   },

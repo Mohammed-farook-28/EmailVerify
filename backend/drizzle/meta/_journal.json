@@ -15,6 +15,13 @@
       "when": 1769944657480,
       "tag": "0001_sour_pride",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1770006927218,
+      "tag": "0002_minor_lethal_legion",
+      "breakpoints": true
     }
   ]
 }
