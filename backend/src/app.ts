@@ -14,6 +14,7 @@ import verificationRoutes from './routes/verification.js';
 import dashboardRoutes from './routes/dashboard.js';
 import billingRoutes from './routes/billing.js';
 import webhookRoutes from './routes/webhooks.js';
+import bulkRoutes from './routes/bulk.js';
 import { metricsMiddleware } from './lib/metrics.js';
 import { expressLogger } from './config/logger.js';
 
@@ -53,6 +54,7 @@ app.use('/home/profile', profileRoutes);
 app.use('/home', verificationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/billing', billingRoutes);
+app.use('/api/bulk', bulkRoutes);
 
 // Error handler (must be last)
 app.use(errorHandler);

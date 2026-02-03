@@ -149,6 +149,64 @@ export const processedWebhookEvent = pgTable('processed_webhook_event', {
   processedAt: timestamp('processed_at').notNull().defaultNow(),
 });
 
+// Bulk Verification Tables
+export const bulkJob = pgTable(
+  'bulk_job',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    sourceType: text('source_type').notNull(), // 'file' or 'paste'
+    filename: text('filename'),
+    totalCount: integer('total_count').notNull(),
+    processedCount: integer('processed_count').notNull().default(0),
+    status: text('status').notNull().default('pending'), // 'pending', 'processing', 'completed', 'failed'
+    validCount: integer('valid_count').notNull().default(0),
+    invalidCount: integer('invalid_count').notNull().default(0),
+    riskyCount: integer('risky_count').notNull().default(0),
+    unknownCount: integer('unknown_count').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    startedAt: timestamp('started_at'),
+    completedAt: timestamp('completed_at'),
+    resultExpiresAt: timestamp('result_expires_at'),
+    resultUrl: text('result_url'),
+  },
+  (table) => ({
+    userIdIdx: index('bulk_job_user_id_idx').on(table.userId),
+    statusIdx: index('bulk_job_status_idx').on(table.status),
+    createdAtIdx: index('bulk_job_created_at_idx').on(table.createdAt),
+  })
+);
+
+export const bulkVerificationResult = pgTable(
+  'bulk_verification_result',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => bulkJob.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    status: text('status').notNull(), // 'valid', 'invalid', 'risky', 'unknown'
+    deliverable: boolean('deliverable').notNull(),
+    risky: boolean('risky').notNull(),
+    unknown: boolean('unknown').notNull(),
+    riskScore: real('risk_score').notNull(),
+    mxRecords: jsonb('mx_records'),
+    smtpProvider: text('smtp_provider'),
+    isFreeEmail: boolean('is_free_email').notNull().default(false),
+    isRoleBased: boolean('is_role_based').notNull().default(false),
+    isCatchAll: boolean('is_catch_all').notNull().default(false),
+    isDisposable: boolean('is_disposable').notNull().default(false),
+    hasMxRecords: boolean('has_mx_records').notNull().default(false),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    jobIdIdx: index('bulk_verification_result_job_id_idx').on(table.jobId),
+    statusIdx: index('bulk_verification_result_status_idx').on(table.status),
+  })
+);
+
 // Type exports for use in application code
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;
@@ -167,3 +225,7 @@ export type CheckoutSession = typeof checkoutSession.$inferSelect;
 export type NewCheckoutSession = typeof checkoutSession.$inferInsert;
 export type ProcessedWebhookEvent = typeof processedWebhookEvent.$inferSelect;
 export type NewProcessedWebhookEvent = typeof processedWebhookEvent.$inferInsert;
+export type BulkJob = typeof bulkJob.$inferSelect;
+export type NewBulkJob = typeof bulkJob.$inferInsert;
+export type BulkVerificationResult = typeof bulkVerificationResult.$inferSelect;
+export type NewBulkVerificationResult = typeof bulkVerificationResult.$inferInsert;

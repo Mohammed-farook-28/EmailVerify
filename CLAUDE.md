@@ -142,7 +142,3 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 - PostgreSQL 16+ (users, sessions, credit_events tables), Redis 7+ (rate limiting, credit cache), DigitalOcean Spaces (avatars) (001-user-auth)
 - TypeScript 5.x (Node.js 20+ backend, Next.js 15+ frontend) (002-verification-engine)
 - Stripe SDK 20.x (payment processing, subscriptions, webhooks) (003-billing)
-
-## Recent Changes
-- 001-user-auth: Added TypeScript 5.x (Node.js 20+ for backend, Next.js 15+ for frontend)
-- 003-billing: Integrated Stripe for one-time purchases and subscriptions, added webhook handlers, subscription renewal worker

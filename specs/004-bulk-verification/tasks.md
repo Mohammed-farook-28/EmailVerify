@@ -1,0 +1,421 @@
+# Tasks: Bulk Email Verification
+
+**Feature**: 004-bulk-verification
+**Branch**: `004-bulk-verification`
+**Input**: Design documents from `/specs/004-bulk-verification/`
+**Prerequisites**: plan.md ✅, spec.md ✅, research.md ✅, data-model.md ✅, contracts/ ✅
+
+**Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: Can run in parallel (different files, no dependencies)
+- **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
+- Include exact file paths in descriptions
+
+## Path Conventions
+
+This is a **web application** project with **separate repositories**:
+- **Backend**: `/Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify/backend/`
+- **Frontend**: `/Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/`
+- **Tests**: `backend/tests/` and `EmailVerify-Frontend/tests/`
+
+**Note**: Backend and frontend are in separate repos, so you'll need to work in both directories during implementation.
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+
+**Purpose**: Install dependencies and configure storage for bulk verification
+
+- [x] T001 Install backend dependencies: `npm install csv-parse xlsx csv-stringify @aws-sdk/client-s3 @aws-sdk/s3-request-presigner` in backend/
+- [x] T002 [P] Configure DigitalOcean Spaces environment variables in backend/.env (SPACES_ENDPOINT, SPACES_REGION, SPACES_ACCESS_KEY, SPACES_SECRET_KEY, SPACES_BUCKET)
+- [x] T003 [P] Add bulk verification settings to backend/.env (BULK_MAX_FILE_SIZE_MB=10, BULK_MAX_EMAILS_PER_JOB=100000, BULK_BATCH_SIZE=100, BULK_RESULT_RETENTION_DAYS=14)
+- [x] T004 [P] Configure Spaces lifecycle policy for 14-day auto-deletion of results/ prefix in DigitalOcean control panel
+- [x] T005 [P] Install frontend dependencies: `npm install react-dropzone` in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: Database schema, shared types, and infrastructure that ALL user stories depend on
+
+**⚠️ CRITICAL**: No user story work can begin until this phase is complete
+
+- [x] T006 Create database migration backend/drizzle/0003_bulk_verification.sql with bulk_jobs and verification_results tables per data-model.md
+- [x] T007 Run migration: `npm run db:migrate` to apply schema changes
+- [x] T008 [P] Define TypeScript types in backend/src/types/bulk.ts (BulkJobStatus, BulkJobSourceType, VerificationStatus, BulkJob, VerificationResult, ProgressEvent enums and interfaces)
+- [x] T009 [P] Add Drizzle schema definitions in backend/src/db/schema.ts for bulkJobs and verificationResults tables with indexes
+- [x] T010 [P] Create S3 client service in backend/src/services/s3-client.ts (initialize S3Client with Spaces config, export singleton)
+- [x] T011 [P] Create SSE middleware in backend/src/middleware/sse.ts (set headers for text/event-stream, handle client disconnect)
+
+**Checkpoint**: Foundation ready - user story implementation can now begin in parallel
+
+---
+
+## Phase 3: User Story 1 - Upload CSV for Bulk Verification (Priority: P1) 🎯 MVP
+
+**Goal**: Users can upload CSV/Excel files (up to 10MB, 100K emails), map email column, and verify all emails with real-time progress
+
+**Independent Test**: Upload a 1000-row CSV file, map email column, start verification, monitor progress via SSE, download results CSV when complete. No other features needed.
+
+### Implementation for User Story 1
+
+#### Backend - File Parsing & Job Creation
+
+- [x] T012 [P] [US1] Implement CSV parser in backend/src/services/file-parser.ts (parseCSV function using csv-parse with streaming, column detection, email extraction)
+- [x] T013 [P] [US1] Implement Excel parser in backend/src/services/file-parser.ts (parseExcel function using xlsx, first sheet only, column detection)
+- [x] T014 [P] [US1] Implement column validation in backend/src/services/file-parser.ts (validateColumn function checks ≥50% valid emails, returns percentage)
+- [x] T015 [US1] Create bulk verification service in backend/src/services/bulk-verification.ts (createBulkJob function: check active job, validate file, parse, deduct credits, create DB records)
+- [x] T016 [US1] Implement active job check in backend/src/services/bulk-verification.ts (getActiveJob function queries DB for pending/processing jobs)
+- [x] T017 [US1] Create file upload endpoint POST /api/bulk/upload in backend/src/routes/bulk.ts (handle multipart/form-data, call createBulkJob, return jobId)
+
+#### Backend - Worker & Processing
+
+- [x] T018 [US1] Create bulk worker in backend/src/workers/bulk-worker.ts (process job in batches of 100, call existing verification engine, update progress, handle errors)
+- [x] T019 [US1] Implement progress calculation in backend/src/workers/bulk-worker.ts (shouldEmitProgress function with 1% or 5s logic, calculate processing rate and ETA)
+- [x] T020 [US1] Add BullMQ job registration for bulk-verification queue in backend/src/workers/bulk-worker.ts (register worker with queue, configure concurrency)
+
+#### Backend - Progress & Results
+
+- [x] T021 [US1] Implement progress streaming endpoint GET /api/bulk/jobs/:jobId/progress in backend/src/routes/bulk.ts (SSE connection, emit progress events from Redis/DB)
+- [x] T022 [US1] Create result storage service in backend/src/services/result-storage.ts (generateResultCSV function with csv-stringify streaming, upload to S3, generate pre-signed URL)
+- [x] T023 [US1] Implement job status endpoint GET /api/bulk/jobs/:jobId in backend/src/routes/bulk.ts (fetch job from DB, return status with counts)
+- [x] T024 [US1] Implement result download endpoint GET /api/bulk/jobs/:jobId/results in backend/src/routes/bulk.ts (check expiration, fetch from S3, stream to client with gzip if needed)
+- [x] T025 [US1] Add job completion handler in backend/src/workers/bulk-worker.ts (call generateResultCSV, update job status to completed, set resultExpiresAt)
+
+#### Frontend - Upload UI
+
+- [x] T026 [P] [US1] Create file upload page in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/app/(dashboard)/home/bulk-verify/page.tsx (layout with back button, main card)
+- [x] T027 [P] [US1] Create FileDropzone component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/file-upload.tsx (react-dropzone, file validation, column mapping UI, credit check)
+- [x] T028 [US1] Create useBulkUpload hook in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/hooks/useBulkVerification.ts (mutation for POST /upload, handle response, redirect to progress page)
+- [x] T029 [US1] Integrate FileDropzone into bulk-verify page (handle upload, show errors, redirect on success)
+
+#### Frontend - Progress UI
+
+- [x] T030 [P] [US1] Create progress page in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/app/(dashboard)/home/bulk-verify/[jobId]/page.tsx (layout for progress display and download button)
+- [x] T031 [P] [US1] Create ProgressStream component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/progress-stream.tsx (EventSource connection, progress bar, counts, rate, ETA)
+- [x] T032 [P] [US1] Create useProgressStream hook in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/hooks/useProgressStream.ts (EventSource setup, state management, auto-reconnect, parse events)
+- [x] T033 [P] [US1] Create ResultDownload component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/result-download.tsx (download button, handle CSV download with filter param)
+- [x] T034 [US1] Integrate ProgressStream and ResultDownload into progress page (show progress until complete, then show download)
+
+**Checkpoint**: User Story 1 complete - Users can upload CSV/Excel, verify emails, monitor progress, and download results
+
+---
+
+## Phase 4: User Story 2 - Paste Emails for Quick Verification (Priority: P2)
+
+**Goal**: Users can paste email lists (comma/newline/semicolon separated) and verify them without creating a file. Paste jobs don't appear in history.
+
+**Independent Test**: Copy 100 emails from various sources, paste into interface, verify all process correctly, download results. History page should NOT show this job.
+
+### Implementation for User Story 2
+
+#### Backend - Paste Processing
+
+- [ ] T035 [P] [US2] Implement email extraction in backend/src/services/bulk-verification.ts (extractEmailsFromText function: split by delimiters, regex match, deduplicate)
+- [ ] T036 [US2] Create paste endpoint POST /api/bulk/paste in backend/src/routes/bulk.ts (handle JSON body, extract emails, create job with sourceType='paste', return jobId)
+
+#### Frontend - Paste UI
+
+- [ ] T037 [P] [US2] Create PasteInput component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/paste-input.tsx (textarea, email count preview, validation feedback)
+- [ ] T038 [P] [US2] Create useBulkPaste hook in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/hooks/useBulkVerification.ts (mutation for POST /paste, handle response, redirect to progress page)
+- [ ] T039 [US2] Add PasteInput to bulk-verify page (tabbed interface or toggle between upload and paste)
+
+**Checkpoint**: User Story 2 complete - Users can paste emails for quick verification (reuses progress/download from US1)
+
+---
+
+## Phase 5: User Story 3 - Track Bulk Verification History (Priority: P2)
+
+**Goal**: Users can view past file upload jobs (excludes paste), search by filename, filter by status, and re-download results if not expired.
+
+**Independent Test**: Upload multiple CSV files over time, access history page, see all past file jobs listed, search for specific filename, filter by status, re-download old results.
+
+### Implementation for User Story 3
+
+#### Backend - History & Search
+
+- [ ] T040 [P] [US3] Implement job history query in backend/src/services/bulk-verification.ts (getJobHistory function: query sourceType='file', pagination, search by filename, filter by status)
+- [ ] T041 [US3] Create history endpoint GET /api/bulk/jobs in backend/src/routes/bulk.ts (call getJobHistory with query params, return jobs + pagination metadata)
+- [ ] T042 [US3] Create job details endpoint GET /api/bulk/jobs/:jobId/details in backend/src/routes/bulk.ts (fetch job + sample results, return combined response)
+
+#### Frontend - History UI
+
+- [ ] T043 [P] [US3] Create history page in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/app/(dashboard)/home/history/page.tsx (layout with search, filters, table, pagination)
+- [ ] T044 [P] [US3] Create JobHistoryTable component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/job-history-table.tsx (table rows, status badges, result availability, download buttons)
+- [ ] T045 [P] [US3] Create useJobHistory hook in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/hooks/useJobHistory.ts (query for GET /jobs with pagination, search, status filter)
+- [ ] T046 [US3] Integrate JobHistoryTable into history page (fetch data, handle pagination, search input, status filter dropdown)
+
+**Checkpoint**: User Story 3 complete - Users can browse, search, and filter bulk job history
+
+---
+
+## Phase 6: User Story 4 - Monitor Real-Time Verification Progress (Priority: P3)
+
+**Goal**: Progress updates automatically refresh every 1% or 5 seconds (whichever first) without manual page refresh. Connection auto-reconnects if dropped.
+
+**Independent Test**: Start a 10,000 email job, observe progress updates stream automatically every few seconds without refresh. Drop network connection briefly, verify reconnection works.
+
+### Implementation for User Story 4
+
+#### Backend - Progress Streaming Enhancements
+
+- [ ] T047 [US4] Enhance progress emitter in backend/src/workers/bulk-worker.ts (emit to Redis pub/sub channel on progress updates)
+- [ ] T048 [US4] Add Redis subscriber in backend/src/routes/bulk.ts progress endpoint (subscribe to job channel, stream events to SSE client)
+- [ ] T049 [US4] Implement connection heartbeat in backend/src/middleware/sse.ts (send keepalive comments every 30 seconds to prevent timeout)
+
+#### Frontend - Auto-Reconnect & Streaming
+
+- [ ] T050 [US4] Enhance useProgressStream hook with auto-reconnect logic (detect EventSource errors, implement exponential backoff, resume from last known position)
+- [ ] T051 [US4] Add connection status indicator in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/progress-stream.tsx (show "Connected", "Reconnecting...", "Disconnected" states)
+
+**Checkpoint**: User Story 4 complete - Progress streaming is robust with auto-reconnect and real-time updates
+
+---
+
+## Phase 7: User Story 5 - Filter and Download Partial Results (Priority: P3)
+
+**Goal**: Users can download filtered subsets of results (valid-only or invalid-only) instead of full results CSV.
+
+**Independent Test**: Complete a bulk job with mixed results (valid + invalid), download "valid only" CSV and verify it contains only valid emails, download "invalid only" and verify it contains only invalid emails.
+
+### Implementation for User Story 5
+
+#### Backend - Filtered Downloads
+
+- [ ] T052 [US5] Add filter parameter handling in backend/src/services/result-storage.ts (generateResultCSV accepts filter: 'all' | 'valid' | 'invalid', applies WHERE clause in DB query)
+- [ ] T053 [US5] Update result download endpoint in backend/src/routes/bulk.ts (parse filter query param, pass to generateResultCSV)
+
+#### Frontend - Filter UI
+
+- [ ] T054 [P] [US5] Add filter dropdown to ResultDownload component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/result-download.tsx (All / Valid Only / Invalid Only options)
+- [ ] T055 [US5] Update download handler to include filter param in URL (append ?filter=valid or ?filter=invalid to results endpoint)
+
+**Checkpoint**: User Story 5 complete - Users can download filtered result subsets
+
+---
+
+## Phase 8: Polish & Cross-Cutting Concerns
+
+**Purpose**: Error handling, validation, cleanup, and final testing across all user stories
+
+### Error Handling & Validation
+
+- [ ] T056 [P] Add error handling for all bulk endpoints in backend/src/routes/bulk.ts (try-catch blocks, standardized error responses per contracts/api-endpoints.md)
+- [ ] T057 [P] Add input validation middleware in backend/src/routes/bulk.ts (file size limits, email count limits, query param validation)
+- [ ] T058 [P] Implement result expiration check in backend/src/services/result-storage.ts (verify resultExpiresAt < NOW, return 410 Gone error)
+- [ ] T059 [P] Add column validation warning in backend/src/services/file-parser.ts (if <50% valid, return warning but allow with user confirmation)
+
+### Cleanup & Background Jobs
+
+- [ ] T060 [P] Create cleanup worker in backend/src/workers/cleanup-worker.ts (daily job to delete expired S3 files, clear result_url in DB)
+- [ ] T061 [P] Add BullMQ job scheduling for cleanup worker (run daily at 2 AM, handle failed deletions)
+
+### Testing & Validation
+
+- [ ] T062 [P] Test file upload happy path per quickstart.md Test 1 (5-email CSV, verify all steps work)
+- [ ] T063 [P] Test paste emails per quickstart.md Test 2 (4 emails with various separators, verify exclusion from history)
+- [ ] T064 [P] Test insufficient credits per quickstart.md Test 3 (reduce balance to 10, try 100-email upload, verify 402 error)
+- [ ] T065 [P] Test active job constraint per quickstart.md Test 4 (create job, try second job, verify 409 error)
+- [ ] T066 [P] Test Excel upload per quickstart.md Test 5 (multi-sheet Excel, verify only first sheet processed)
+- [ ] T067 [P] Test SSE auto-reconnect per quickstart.md Test 6 (drop connection, verify reconnection works)
+- [ ] T068 [P] Test result expiration per quickstart.md Test 7 (fast-forward expiration in DB, verify 410 error)
+- [ ] T069 [P] Test column validation per quickstart.md Test 8 (CSV with <50% valid emails, verify warning)
+
+### Documentation & Cleanup
+
+- [ ] T070 [P] Add API documentation comments to all bulk endpoints in backend/src/routes/bulk.ts
+- [ ] T071 [P] Add JSDoc comments to bulk services in backend/src/services/
+- [ ] T072 [P] Code cleanup and refactoring for consistency across all bulk modules
+- [ ] T073 [P] Security audit: file upload limits, SQL injection prevention, authorization checks on all endpoints
+
+**Checkpoint**: Feature complete, tested, and production-ready
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (Phase 1)**: No dependencies - can start immediately
+- **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
+- **User Stories (Phase 3-7)**: All depend on Foundational phase completion
+  - US1 (P1): No dependencies on other stories - **MVP READY**
+  - US2 (P2): Depends on US1 for progress/download UI (reuses components)
+  - US3 (P2): Independent of US1/US2, can run in parallel
+  - US4 (P3): Enhances US1 progress streaming (optional improvement)
+  - US5 (P3): Enhances US1 result download (optional improvement)
+- **Polish (Phase 8)**: Depends on all desired user stories being complete
+
+### User Story Dependencies
+
+```
+Foundational (Phase 2) - BLOCKS ALL
+    ↓
+US1 (P1) - Core upload & verify ← MVP BASELINE
+    ↓ (reuses progress UI)
+US2 (P2) - Paste emails
+
+US3 (P2) - History (independent)
+
+US4 (P3) - Enhanced progress (enhances US1)
+
+US5 (P3) - Filtered downloads (enhances US1)
+```
+
+### Within Each User Story
+
+- Backend models/types before services
+- Services before endpoints
+- Endpoints before frontend hooks
+- Hooks before UI components
+- Core implementation before enhancements
+
+### Parallel Opportunities
+
+**Phase 1 (Setup)**: T002, T003, T004, T005 can run in parallel
+
+**Phase 2 (Foundational)**: T008, T009, T010, T011 can run in parallel after T006-T007 complete
+
+**Phase 3 (US1)**:
+- Backend parsing: T012, T013, T014 can run in parallel
+- Frontend upload UI: T026, T027 can run in parallel
+- Frontend progress UI: T030, T031, T032, T033 can run in parallel
+
+**Phase 4 (US2)**: T035, T037, T038 can run in parallel
+
+**Phase 5 (US3)**: T040, T043, T044, T045 can run in parallel
+
+**Phase 6 (US4)**: T050, T051 can run in parallel
+
+**Phase 7 (US5)**: T054 can run in parallel with T052-T053
+
+**Phase 8 (Polish)**: T056-T073 are mostly parallelizable (different concerns)
+
+---
+
+## Parallel Example: User Story 1 Backend Parsing
+
+```bash
+# Launch all parsing functions together (different files/functions):
+Task: "Implement CSV parser in backend/src/services/file-parser.ts"
+Task: "Implement Excel parser in backend/src/services/file-parser.ts"
+Task: "Implement column validation in backend/src/services/file-parser.ts"
+```
+
+## Parallel Example: User Story 1 Frontend UI
+
+```bash
+# Launch all frontend components together:
+Task: "Create file upload page in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/app/(dashboard)/home/bulk-verify/page.tsx"
+Task: "Create FileDropzone component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/file-upload.tsx"
+
+# Then launch progress components together:
+Task: "Create progress page in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/app/(dashboard)/home/bulk-verify/[jobId]/page.tsx"
+Task: "Create ProgressStream component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/progress-stream.tsx"
+Task: "Create useProgressStream hook in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/hooks/useProgressStream.ts"
+Task: "Create ResultDownload component in /Users/prabhakaranr/Documents/dev/BotCompany/EmailVerify-Frontend/src/components/bulk/result-download.tsx"
+```
+
+---
+
+## Implementation Strategy
+
+### MVP First (User Story 1 Only)
+
+1. **Phase 1**: Setup → Install dependencies, configure environment
+2. **Phase 2**: Foundational → Database migration, types, shared services
+3. **Phase 3**: User Story 1 → Complete upload, verify, progress, download
+4. **STOP and VALIDATE**: Test with quickstart.md scenarios
+5. **Deploy/Demo**: MVP ready with core bulk verification
+
+**Estimated tasks**: T001-T034 (34 tasks for MVP)
+
+### Incremental Delivery
+
+1. **Foundation** (T001-T011): Setup + DB schema → ~2-3 days
+2. **US1: Core Bulk** (T012-T034): Upload & verify → ~5-7 days → **MVP READY**
+3. **US2: Paste** (T035-T039): Quick paste input → ~1-2 days
+4. **US3: History** (T040-T046): Browse past jobs → ~2-3 days
+5. **US4: Enhanced Progress** (T047-T051): Auto-refresh streaming → ~1-2 days
+6. **US5: Filtered Downloads** (T052-T055): Result filters → ~1 day
+7. **Polish** (T056-T073): Testing, cleanup, docs → ~2-3 days
+
+**Total**: ~14-21 days for full feature with all 5 user stories
+
+### Parallel Team Strategy
+
+With 3 developers after Foundation completes:
+
+- **Developer A**: US1 (T012-T034) - Core bulk verification
+- **Developer B**: US3 (T040-T046) - History (independent of US1)
+- **Developer C**: Setup Phase 8 infrastructure (T056-T061)
+
+After US1 completes:
+- **Developer A**: US2 (T035-T039) - Paste (reuses US1 progress UI)
+- **Developer B**: US4 (T047-T051) - Enhanced progress
+- **Developer C**: US5 (T052-T055) - Filtered downloads
+
+Then all converge on Phase 8 testing (T062-T073)
+
+---
+
+## Task Summary
+
+| Phase | Tasks | User Story | Priority | Parallelizable |
+|-------|-------|------------|----------|----------------|
+| Phase 1: Setup | T001-T005 (5 tasks) | N/A | Setup | 4 parallel |
+| Phase 2: Foundational | T006-T011 (6 tasks) | N/A | Blocking | 4 parallel |
+| Phase 3: US1 Upload CSV | T012-T034 (23 tasks) | US1 | P1 - MVP | 13 parallel |
+| Phase 4: US2 Paste | T035-T039 (5 tasks) | US2 | P2 | 3 parallel |
+| Phase 5: US3 History | T040-T046 (7 tasks) | US3 | P2 | 4 parallel |
+| Phase 6: US4 Real-Time Progress | T047-T051 (5 tasks) | US4 | P3 | 2 parallel |
+| Phase 7: US5 Filtered Downloads | T052-T055 (4 tasks) | US5 | P3 | 2 parallel |
+| Phase 8: Polish | T056-T073 (18 tasks) | Cross-cutting | Final | 18 parallel |
+| **TOTAL** | **73 tasks** | **5 user stories** | **MVP at T034** | **50 parallelizable** |
+
+---
+
+## MVP Scope Recommendation
+
+**Minimum Viable Product** = Phase 1 + Phase 2 + Phase 3 (US1 only)
+
+This delivers:
+- ✅ Upload CSV/Excel files (up to 10MB, 100K emails)
+- ✅ Automatic column detection and mapping
+- ✅ Credit deduction and validation
+- ✅ Batch processing with BullMQ
+- ✅ Real-time progress via SSE
+- ✅ Download results as CSV
+- ✅ Result retention for 14 days
+- ✅ One job at a time per user
+
+**Not included in MVP** (can add incrementally):
+- ❌ Paste emails (US2)
+- ❌ History browsing (US3)
+- ❌ Enhanced streaming (US4)
+- ❌ Filtered downloads (US5)
+
+**Validation**: After completing T034, run quickstart.md Test 1, Test 3, Test 4, Test 5 to verify MVP works end-to-end.
+
+---
+
+## Notes
+
+- [P] tasks = different files, no dependencies - can run in parallel
+- [Story] label maps task to specific user story for traceability
+- Each user story should be independently completable and testable
+- Commit after each task or logical group
+- Stop at any checkpoint to validate story independently
+- Backend tasks create API endpoints per contracts/api-endpoints.md
+- Frontend tasks follow existing dashboard patterns from Epic 001-003
+- Database schema follows data-model.md exactly
+- All decisions justified in research.md
+- Test scenarios from quickstart.md validate implementation
+
+---
+
+**Generated**: 2026-02-02
+**Status**: Ready for implementation
+**Next Command**: Start with Phase 1 (T001-T005) or jump to MVP scope (T001-T034)
