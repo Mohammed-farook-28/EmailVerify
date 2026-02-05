@@ -142,3 +142,8 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 - PostgreSQL 16+ (users, sessions, credit_events tables), Redis 7+ (rate limiting, credit cache), DigitalOcean Spaces (avatars) (001-user-auth)
 - TypeScript 5.x (Node.js 20+ backend, Next.js 15+ frontend) (002-verification-engine)
 - Stripe SDK 20.x (payment processing, subscriptions, webhooks) (003-billing)
+- TypeScript 5.x (Node.js 20+) + Express, Drizzle ORM, BullMQ Pro, Redis 7+, Better Auth (005-api-webhooks)
+- PostgreSQL 16+ (api_keys, webhooks, webhook_deliveries), Redis (rate limiting, idempotency cache) (005-api-webhooks)
+
+## Recent Changes
+- 005-api-webhooks: Added TypeScript 5.x (Node.js 20+) + Express, Drizzle ORM, BullMQ Pro, Redis 7+, Better Auth

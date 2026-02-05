@@ -15,6 +15,10 @@ import dashboardRoutes from './routes/dashboard.js';
 import billingRoutes from './routes/billing.js';
 import webhookRoutes from './routes/webhooks.js';
 import bulkRoutes from './routes/bulk.js';
+import apiV1Routes from './routes/api-v1/index.js';
+import dashboardApiKeysRoutes from './routes/dashboard/api-keys.js';
+import dashboardUsageRoutes from './routes/dashboard/usage.js';
+import dashboardWebhooksRoutes from './routes/dashboard/webhooks.js';
 import { metricsMiddleware } from './lib/metrics.js';
 import { expressLogger } from './config/logger.js';
 
@@ -48,6 +52,10 @@ app.use(express.json());
 // Health and metrics endpoints (no auth required)
 app.use('/health', healthRoutes);
 
+// Public API v1 routes (NO CORS - server-side only per FR-029)
+// Note: CORS is NOT applied to /api/v1/* routes intentionally
+app.use('/api/v1', apiV1Routes);
+
 // Custom routes
 app.use('/api/user', userRoutes);
 app.use('/home/profile', profileRoutes);
@@ -55,6 +63,9 @@ app.use('/home', verificationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/bulk', bulkRoutes);
+app.use('/home/api-keys', dashboardApiKeysRoutes);
+app.use('/home/usage', dashboardUsageRoutes);
+app.use('/home/webhooks', dashboardWebhooksRoutes);
 
 // Error handler (must be last)
 app.use(errorHandler);

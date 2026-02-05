@@ -52,6 +52,7 @@ export const verification = pgTable('verification', {
   value: text('value').notNull(), // hashed OTP
   expiresAt: timestamp('expires_at').notNull(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
 
   // Custom: Track verification attempts
   attempts: integer('attempts').notNull().default(0),
@@ -207,6 +208,82 @@ export const bulkVerificationResult = pgTable(
   })
 );
 
+// API Key table - stores API key metadata (raw key never stored, only hash)
+export const apiKey = pgTable(
+  'api_key',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    keyHash: text('key_hash').notNull().unique(),
+    keyPrefix: text('key_prefix').notNull(), // First 12 chars for display (e.g., `ek_Ue7HpvL9`)
+    isTest: boolean('is_test').notNull().default(false), // True for `ek_test_` keys
+    status: text('status').notNull().default('active'), // 'active', 'expired', 'revoked'
+    expiresAt: timestamp('expires_at'),
+    lastUsedAt: timestamp('last_used_at'),
+    usageCount: integer('usage_count').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    revokedAt: timestamp('revoked_at'),
+    hardDeleteAt: timestamp('hard_delete_at'),
+  },
+  (table) => ({
+    userIdIdx: index('api_key_user_id_idx').on(table.userId),
+    hardDeleteAtIdx: index('api_key_hard_delete_at_idx').on(table.hardDeleteAt),
+  })
+);
+
+// Webhook table - stores webhook endpoint configurations
+export const webhook = pgTable(
+  'webhook',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(), // HTTPS endpoint URL
+    secretHash: text('secret_hash').notNull(), // SHA-256 hash of signing secret
+    secretPrefix: text('secret_prefix').notNull(), // First 12 chars (e.g., `whsec_abc123`)
+    events: jsonb('events').notNull(), // Array of subscribed event types
+    payloadMode: text('payload_mode').notNull().default('full'), // 'full' or 'summary'
+    status: text('status').notNull().default('active'), // 'active', 'failing', 'paused'
+    failureCount: integer('failure_count').notNull().default(0),
+    lastDeliveryAt: timestamp('last_delivery_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index('webhook_user_id_idx').on(table.userId),
+    statusIdx: index('webhook_status_idx').on(table.status),
+  })
+);
+
+// Webhook delivery table - stores individual webhook delivery attempts for debugging
+export const webhookDelivery = pgTable(
+  'webhook_delivery',
+  {
+    id: text('id').primaryKey(),
+    webhookId: text('webhook_id')
+      .notNull()
+      .references(() => webhook.id, { onDelete: 'cascade' }),
+    eventId: text('event_id').notNull(), // Unique event identifier
+    eventType: text('event_type').notNull(), // Event type (e.g., verification.completed)
+    payload: jsonb('payload').notNull(), // Full payload sent
+    status: text('status').notNull().default('pending'), // 'pending', 'delivered', 'failed'
+    responseCode: integer('response_code'),
+    responseBody: text('response_body'), // Response body (truncated)
+    durationMs: integer('duration_ms'),
+    attempt: integer('attempt').notNull().default(1), // Attempt number (1-4)
+    nextRetryAt: timestamp('next_retry_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    webhookIdIdx: index('webhook_delivery_webhook_id_idx').on(table.webhookId),
+    eventIdIdx: index('webhook_delivery_event_id_idx').on(table.eventId),
+    createdAtIdx: index('webhook_delivery_created_at_idx').on(table.createdAt),
+  })
+);
+
 // Type exports for use in application code
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;
@@ -229,3 +306,9 @@ export type BulkJob = typeof bulkJob.$inferSelect;
 export type NewBulkJob = typeof bulkJob.$inferInsert;
 export type BulkVerificationResult = typeof bulkVerificationResult.$inferSelect;
 export type NewBulkVerificationResult = typeof bulkVerificationResult.$inferInsert;
+export type ApiKey = typeof apiKey.$inferSelect;
+export type NewApiKey = typeof apiKey.$inferInsert;
+export type Webhook = typeof webhook.$inferSelect;
+export type NewWebhook = typeof webhook.$inferInsert;
+export type WebhookDelivery = typeof webhookDelivery.$inferSelect;
+export type NewWebhookDelivery = typeof webhookDelivery.$inferInsert;

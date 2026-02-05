@@ -87,3 +87,35 @@ export async function sendDeletionCancelled(email: string): Promise<void> {
      <p>Your account deletion has been cancelled. Your account is now fully active again.</p>`,
   );
 }
+
+export async function sendWebhookPausedNotification(
+  email: string,
+  webhookUrl: string,
+  webhookId: string,
+): Promise<void> {
+  // Mask the webhook URL for security (show only domain)
+  let maskedUrl: string;
+  try {
+    const url = new URL(webhookUrl);
+    maskedUrl = `${url.protocol}//${url.hostname}/...`;
+  } catch {
+    maskedUrl = webhookUrl.substring(0, 30) + '...';
+  }
+
+  await send(
+    email,
+    'Your EmailKit webhook has been paused',
+    `<h2>Webhook Paused</h2>
+     <p>Your webhook endpoint has been paused after 4 consecutive delivery failures:</p>
+     <p style="font-family: monospace; background: #f4f4f4; padding: 10px; border-radius: 4px;">${maskedUrl}</p>
+     <p><strong>What happened:</strong> We attempted to deliver events to your webhook 4 times, but all attempts failed.</p>
+     <p><strong>What to do:</strong></p>
+     <ol>
+       <li>Check that your endpoint is accessible and responding with 2xx status codes</li>
+       <li>Verify your server logs for any errors</li>
+       <li>Once fixed, reactivate the webhook from your <a href="https://app.emailkit.io/home/api-keys">dashboard</a></li>
+     </ol>
+     <p>Webhook ID: <code>${webhookId}</code></p>
+     <p style="color: #666; font-size: 12px;">You're receiving this email because webhook notifications are enabled for your account.</p>`,
+  );
+}

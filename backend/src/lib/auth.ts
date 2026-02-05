@@ -13,6 +13,9 @@ export const auth = betterAuth({
     schema,
   }),
 
+  // Trust frontend origin for CORS
+  trustedOrigins: [env.frontendUrl],
+
   // Email and password authentication (disabled - using Email OTP instead)
   emailAndPassword: {
     enabled: false,
