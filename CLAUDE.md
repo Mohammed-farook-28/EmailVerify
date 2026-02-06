@@ -144,6 +144,8 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 - Stripe SDK 20.x (payment processing, subscriptions, webhooks) (003-billing)
 - TypeScript 5.x (Node.js 20+) + Express, Drizzle ORM, BullMQ Pro, Redis 7+, Better Auth (005-api-webhooks)
 - PostgreSQL 16+ (api_keys, webhooks, webhook_deliveries), Redis (rate limiting, idempotency cache) (005-api-webhooks)
+- TypeScript 5.x, Next.js 15+ (App Router), React 19+ + Next.js, React, Tailwind CSS (assumed from Figma design system), Radix UI or similar headless primitives for modal (006-active-verification)
+- N/A (no backend or database work) (006-active-verification)
 
 ## Recent Changes
 - 005-api-webhooks: Added TypeScript 5.x (Node.js 20+) + Express, Drizzle ORM, BullMQ Pro, Redis 7+, Better Auth

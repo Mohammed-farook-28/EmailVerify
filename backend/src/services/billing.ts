@@ -3,6 +3,19 @@ import { creditEvent, subscription, user } from '../db/schema.js';
 import { and, desc, eq, gte } from 'drizzle-orm';
 import { logger } from '../config/logger.js';
 
+const PLAN_CREDITS: Record<string, number> = {
+  'starter-monthly': 1000,
+  'starter-annual': 1000,
+  'growth-monthly': 5000,
+  'growth-annual': 5000,
+  'pro-monthly': 15000,
+  'pro-annual': 15000,
+  'scale-monthly': 50000,
+  'scale-annual': 50000,
+  'titan-monthly': 200000,
+  'titan-annual': 200000,
+};
+
 export interface BillingInfo {
   balance: number;
   subscription?: {
@@ -64,7 +77,7 @@ export async function getBillingInfo(userId: string): Promise<BillingInfo> {
       billingInfo.subscription = {
         planId: userSubscription.planId,
         planName,
-        creditsPerPeriod: userSubscription.creditsPerPeriod,
+        creditsPerPeriod: PLAN_CREDITS[userSubscription.planId] ?? 0,
         billingCycle,
         status: userSubscription.status,
         currentPeriodStart: userSubscription.currentPeriodStart,

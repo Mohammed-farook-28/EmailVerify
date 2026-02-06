@@ -2,6 +2,7 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import swaggerUi from 'swagger-ui-express';
 import { toNodeHandler } from 'better-auth/node';
 import { env } from './config/env.js';
 import { logger } from './middleware/logger.js';
@@ -21,6 +22,7 @@ import dashboardUsageRoutes from './routes/dashboard/usage.js';
 import dashboardWebhooksRoutes from './routes/dashboard/webhooks.js';
 import { metricsMiddleware } from './lib/metrics.js';
 import { expressLogger } from './config/logger.js';
+import { swaggerSpec } from './config/swagger.js';
 
 const app = express();
 
@@ -51,6 +53,15 @@ app.use(express.json());
 
 // Health and metrics endpoints (no auth required)
 app.use('/health', healthRoutes);
+
+// Swagger API documentation (development only)
+if (!env.isProduction) {
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+    explorer: true,
+    customSiteTitle: 'EmailKit API Docs',
+  }));
+  app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
+}
 
 // Public API v1 routes (NO CORS - server-side only per FR-029)
 // Note: CORS is NOT applied to /api/v1/* routes intentionally

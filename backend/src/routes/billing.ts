@@ -225,8 +225,8 @@ router.get(
         status: status.status,
         paymentStatus: status.paymentStatus,
         type: session.type,
-        packageId: session.metadata?.packageId,
-        planId: session.metadata?.planId,
+        packageId: (session.metadata as Record<string, string>)?.packageId,
+        planId: (session.metadata as Record<string, string>)?.planId,
       });
     } catch (error) {
       logger.error({ error, sessionId: req.params.sessionId }, 'Failed to get checkout status');

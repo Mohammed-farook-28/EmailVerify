@@ -1,0 +1,831 @@
+# Health Endpoints
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns server health status
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /health/ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness check
+      description: Checks if all dependencies (DB, Redis) are ready
+      responses:
+        '200':
+          description: All dependencies ready
+        '503':
+          description: One or more dependencies not ready
+
+  # User Profile Endpoints
+  /api/user/profile:
+    get:
+      tags:
+        - User
+      summary: Get user profile
+      description: Returns complete user profile with credits
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/user/profile/name:
+    put:
+      tags:
+        - User
+      summary: Update user name
+      description: Update first and last name
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - firstName
+                - lastName
+              properties:
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+      responses:
+        '200':
+          description: Name updated
+        '400':
+          description: Invalid input
+        '401':
+          description: Not authenticated
+
+  # Verification Endpoints
+  /home/quick-verify:
+    post:
+      tags:
+        - Verification
+      summary: Quick single email verification
+      description: Verify a single email address
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationResult'
+        '400':
+          description: Invalid email
+        '401':
+          description: Not authenticated
+        '402':
+          description: Insufficient credits
+
+  /home/history:
+    get:
+      tags:
+        - Verification
+      summary: Get verification history
+      description: Returns paginated verification history
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Verification history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VerificationResult'
+                  pagination:
+                    type: object
+                    properties:
+                      page:
+                        type: integer
+                      limit:
+                        type: integer
+                      total:
+                        type: integer
+
+  # Bulk Verification Endpoints
+  /api/bulk/upload:
+    post:
+      tags:
+        - Bulk
+      summary: Upload file for bulk verification
+      description: Upload CSV/Excel file with emails to verify
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  totalCount:
+                    type: integer
+        '400':
+          description: Invalid file
+        '402':
+          description: Insufficient credits
+
+  /api/bulk/paste:
+    post:
+      tags:
+        - Bulk
+      summary: Submit emails for bulk verification
+      description: Submit list of emails (newline or comma separated)
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - emails
+              properties:
+                emails:
+                  type: string
+                  description: Newline or comma separated emails
+      responses:
+        '200':
+          description: Job created
+        '400':
+          description: Invalid input
+        '402':
+          description: Insufficient credits
+
+  /api/bulk/jobs:
+    get:
+      tags:
+        - Bulk
+      summary: List bulk jobs
+      description: Get paginated list of bulk verification jobs
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BulkJob'
+
+  /api/bulk/jobs/{jobId}:
+    get:
+      tags:
+        - Bulk
+      summary: Get bulk job status
+      description: Get status and progress of a bulk job
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkJob'
+        '404':
+          description: Job not found
+
+  /api/bulk/jobs/{jobId}/results:
+    get:
+      tags:
+        - Bulk
+      summary: Get bulk job results
+      description: Get verification results for a completed job
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, csv]
+            default: json
+      responses:
+        '200':
+          description: Job results
+
+  # API Key Management
+  /home/api-keys:
+    get:
+      tags:
+        - API Keys
+      summary: List API keys
+      description: Get all API keys for the user
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKey'
+
+    post:
+      tags:
+        - API Keys
+      summary: Create API key
+      description: Create a new API key
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                isTest:
+                  type: boolean
+                  default: false
+                expiresInDays:
+                  type: integer
+                  nullable: true
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    $ref: '#/components/schemas/ApiKey'
+                  rawKey:
+                    type: string
+                    description: Full key (only shown once)
+
+  /home/api-keys/{keyId}:
+    delete:
+      tags:
+        - API Keys
+      summary: Revoke API key
+      description: Revoke an API key
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: keyId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Key revoked
+        '404':
+          description: Key not found
+
+  # Webhook Management
+  /home/webhooks:
+    get:
+      tags:
+        - Webhooks
+      summary: List webhooks
+      description: Get all webhooks for the user
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Webhook'
+
+    post:
+      tags:
+        - Webhooks
+      summary: Create webhook
+      description: Create a new webhook endpoint
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+                - events
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                      - verification.completed
+                      - bulk.completed
+                      - credits.low
+                payloadMode:
+                  type: string
+                  enum: [full, summary]
+                  default: full
+      responses:
+        '201':
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook:
+                    $ref: '#/components/schemas/Webhook'
+                  signingSecret:
+                    type: string
+                    description: Signing secret (only shown once)
+
+  /home/webhooks/{webhookId}:
+    delete:
+      tags:
+        - Webhooks
+      summary: Delete webhook
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: webhookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook deleted
+        '404':
+          description: Webhook not found
+
+  # Billing Endpoints
+  /api/billing/info:
+    get:
+      tags:
+        - Billing
+      summary: Get billing info
+      description: Get credit balance and subscription info
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Billing info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditBalance'
+
+  /api/billing/packages:
+    get:
+      tags:
+        - Billing
+      summary: List credit packages
+      description: Get available one-time credit packages
+      responses:
+        '200':
+          description: Credit packages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  packages:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        credits:
+                          type: integer
+                        price:
+                          type: number
+                        pricePerCredit:
+                          type: number
+
+  /api/billing/plans:
+    get:
+      tags:
+        - Billing
+      summary: List subscription plans
+      description: Get available subscription plans
+      responses:
+        '200':
+          description: Subscription plans
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        credits:
+                          type: integer
+                        monthlyPrice:
+                          type: number
+                        annualPrice:
+                          type: number
+
+  /api/billing/checkout/one-time:
+    post:
+      tags:
+        - Billing
+      summary: Create one-time purchase checkout
+      description: Create Stripe checkout session for credit package
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - packageId
+              properties:
+                packageId:
+                  type: string
+      responses:
+        '200':
+          description: Checkout session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                  url:
+                    type: string
+
+  /api/billing/checkout/subscription:
+    post:
+      tags:
+        - Billing
+      summary: Create subscription checkout
+      description: Create Stripe checkout session for subscription
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - planId
+                - billingCycle
+              properties:
+                planId:
+                  type: string
+                billingCycle:
+                  type: string
+                  enum: [monthly, annual]
+      responses:
+        '200':
+          description: Checkout session created
+
+  /api/billing/transactions:
+    get:
+      tags:
+        - Billing
+      summary: Get transaction history
+      description: Get paginated credit transaction history
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Transaction history
+
+  # Public API v1 Endpoints
+  /api/v1/verify:
+    post:
+      tags:
+        - Public API
+      summary: Verify single email
+      description: Verify a single email address using API key
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationResult'
+        '400':
+          description: Invalid email
+        '401':
+          description: Invalid API key
+        '402':
+          description: Insufficient credits
+        '429':
+          description: Rate limit exceeded
+
+  /api/v1/verify/bulk:
+    post:
+      tags:
+        - Public API
+      summary: Create bulk verification job
+      description: Submit emails for bulk verification
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - emails
+              properties:
+                emails:
+                  type: array
+                  items:
+                    type: string
+                    format: email
+                  maxItems: 10000
+      responses:
+        '200':
+          description: Bulk job created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  totalCount:
+                    type: integer
+        '400':
+          description: Invalid input
+        '402':
+          description: Insufficient credits
+
+  /api/v1/verify/bulk/{jobId}:
+    get:
+      tags:
+        - Public API
+      summary: Get bulk job status
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkJob'
+
+  /api/v1/verify/bulk/{jobId}/results:
+    get:
+      tags:
+        - Public API
+      summary: Get bulk job results
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Verification results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VerificationResult'
+
+  /api/v1/credits:
+    get:
+      tags:
+        - Public API
+      summary: Get credit balance
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Credit balance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  balance:
+                    type: integer
+
+  /api/v1/webhooks:
+    get:
+      tags:
+        - Public API
+      summary: List webhooks
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of webhooks
+
+    post:
+      tags:
+        - Public API
+      summary: Create webhook
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+                - events
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Webhook created
+
+  /api/v1/webhooks/{webhookId}:
+    delete:
+      tags:
+        - Public API
+      summary: Delete webhook
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: webhookId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook deleted
