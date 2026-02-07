@@ -8,7 +8,7 @@
 import { db } from '../db/index.js';
 import { verificationResult } from '../db/schema.js';
 import { logger, createLogger } from '../config/logger.js';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, gt, count } from 'drizzle-orm';
 import type { VerificationResult } from '../db/schema.js';
 
 /**
@@ -20,21 +20,29 @@ import type { VerificationResult } from '../db/schema.js';
  */
 export async function getRecentVerifications(
   userId: string,
-  limit: number = 10
-): Promise<VerificationResult[]> {
+  limit: number = 10,
+  offset: number = 0
+): Promise<{ results: VerificationResult[]; total: number }> {
   const serviceLogger = createLogger({ userId, operation: 'getRecentVerifications' });
 
   try {
-    const results = await db
-      .select()
-      .from(verificationResult)
-      .where(eq(verificationResult.userId, userId))
-      .orderBy(desc(verificationResult.createdAt))
-      .limit(limit);
+    const [results, [{ total }]] = await Promise.all([
+      db
+        .select()
+        .from(verificationResult)
+        .where(eq(verificationResult.userId, userId))
+        .orderBy(desc(verificationResult.createdAt))
+        .limit(limit)
+        .offset(offset),
+      db
+        .select({ total: count() })
+        .from(verificationResult)
+        .where(eq(verificationResult.userId, userId)),
+    ]);
 
-    serviceLogger.info({ count: results.length }, 'Retrieved recent verifications');
+    serviceLogger.info({ count: results.length, total }, 'Retrieved recent verifications');
 
-    return results;
+    return { results, total };
   } catch (error: any) {
     serviceLogger.error({ error: error.message }, 'Failed to get recent verifications');
     throw error;
@@ -164,9 +172,34 @@ export async function deleteOldVerifications(
   }
 }
 
+/**
+ * Get a verification result for a specific email created after a given timestamp
+ */
+export async function getVerificationByEmailSince(
+  userId: string,
+  email: string,
+  since: Date
+): Promise<VerificationResult | null> {
+  const results = await db
+    .select()
+    .from(verificationResult)
+    .where(
+      and(
+        eq(verificationResult.userId, userId),
+        eq(verificationResult.email, email.toLowerCase()),
+        gt(verificationResult.createdAt, since)
+      )
+    )
+    .orderBy(desc(verificationResult.createdAt))
+    .limit(1);
+
+  return results[0] || null;
+}
+
 export default {
   getRecentVerifications,
   getVerificationById,
   getVerificationStats,
   deleteOldVerifications,
+  getVerificationByEmailSince,
 };

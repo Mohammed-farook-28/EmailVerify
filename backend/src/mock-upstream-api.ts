@@ -139,7 +139,8 @@ function generateMockResult(email: string): VerificationResult {
 // Simulate occasional failures for testing error handling
 let requestCount = 0;
 
-app.post('/verify', (req: Request<{}, {}, VerificationRequest>, res: Response) => {
+// Match real API endpoint path: POST /verify/single
+app.post('/verify/single', (req: Request<{}, {}, VerificationRequest>, res: Response) => {
   requestCount++;
 
   const { email, idempotencyKey } = req.body;
@@ -187,7 +188,7 @@ app.get('/health', (_req: Request, res: Response) => {
 
 app.listen(PORT, () => {
   console.log(`\n✅ Mock Upstream API running on http://localhost:${PORT}`);
-  console.log(`📧 POST /verify - Verify email address`);
+  console.log(`📧 POST /verify/single - Verify email address`);
   console.log(`💚 GET /health - Health check\n`);
   console.log(`Test patterns:`);
   console.log(`  - test@gmail.com -> valid (score: 0.95)`);

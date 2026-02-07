@@ -14,6 +14,7 @@ import {
   getDashboardStats,
   getStatusDistribution,
   getVerificationTrend,
+  getUsageByStatus,
 } from '../services/dashboard.js';
 
 const router = Router();
@@ -164,6 +165,37 @@ router.get('/metrics/trend', async (req: Request, res: Response) => {
     return res.status(500).json({
       error: 'Internal server error',
       message: 'Failed to retrieve verification trend',
+    });
+  }
+});
+
+/**
+ * GET /api/dashboard/metrics/usage-by-status
+ *
+ * Get daily verification counts broken down by status
+ *
+ * Query params:
+ * - range: number (7, 30, or 90 days, default: 7)
+ */
+router.get('/metrics/usage-by-status', async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const range = parseInt(req.query.range as string, 10) || 7;
+
+  const validRanges = [7, 30, 90];
+  const rangeDays = validRanges.includes(range) ? range : 7;
+
+  try {
+    const data = await getUsageByStatus(userId, rangeDays);
+
+    return res.json({
+      success: true,
+      data,
+      range: rangeDays,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: 'Failed to retrieve usage by status',
     });
   }
 });

@@ -8,6 +8,8 @@ import * as EmailService from '../services/email.js';
 import * as CreditService from '../services/credit.js';
 
 export const auth = betterAuth({
+  baseURL: env.backendUrl,
+
   database: drizzleAdapter(db, {
     provider: 'pg',
     schema,

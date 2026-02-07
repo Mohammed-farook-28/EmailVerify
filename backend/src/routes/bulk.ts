@@ -13,7 +13,8 @@ import multer from 'multer';
 import { requireAuth } from '../middleware/auth.js';
 import { sseMiddleware, sendSSEEvent } from '../middleware/sse.js';
 import { createLogger } from '../config/logger.js';
-import { createBulkJob, getBulkJob } from '../services/bulk-verification.js';
+import { createBulkJob, getBulkJob, getUserBulkJobs, getBulkJobEmails, renameBulkJob, deleteBulkJob } from '../services/bulk-verification.js';
+import { streamResultsAsCSV } from '../services/result-storage.js';
 import { SourceType } from '../types/bulk.js';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -49,6 +50,41 @@ const upload = multer({
 
 // Apply auth middleware to all routes
 router.use(requireAuth);
+
+/**
+ * GET /api/bulk/jobs
+ *
+ * List all bulk jobs for the authenticated user
+ *
+ * Query params:
+ * - limit: number (default: 50, max: 100)
+ * - offset: number (default: 0)
+ *
+ * Response:
+ * - 200: Array of bulk jobs
+ */
+router.get(
+  '/jobs',
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user!.id;
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 100);
+    const offset = parseInt(req.query.offset as string, 10) || 0;
+
+    try {
+      const jobs = await getUserBulkJobs(userId, limit, offset);
+
+      return res.json({
+        success: true,
+        jobs,
+        count: jobs.length,
+        offset,
+        limit,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 /**
  * POST /api/bulk/upload
@@ -372,13 +408,6 @@ router.get(
         });
       }
 
-      if (!job.resultUrl) {
-        return res.status(404).json({
-          error: 'Results not found',
-          message: 'Results file is not available',
-        });
-      }
-
       // Check if results have expired
       if (job.resultExpiresAt && new Date() > job.resultExpiresAt) {
         return res.status(410).json({
@@ -387,8 +416,112 @@ router.get(
         });
       }
 
-      // Redirect to pre-signed S3 URL
-      return res.redirect(job.resultUrl);
+      // If S3 URL exists, redirect to it
+      if (job.resultUrl) {
+        return res.redirect(job.resultUrl);
+      }
+
+      // Fallback: generate CSV on-the-fly from DB
+      const csvStream = await streamResultsAsCSV(jobId);
+      const filename = (job.filename || `bulk-results-${jobId}`).replace(/\.[^.]+$/, '') + '-results.csv';
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return csvStream.pipe(res);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/bulk/jobs/:jobId/emails
+ *
+ * Get paginated email results for a bulk job (JSON)
+ *
+ * Query params:
+ * - status: 'all' | 'valid' | 'invalid' | 'risky' | 'unknown' (default: 'all')
+ * - limit: number (default: 50, max: 100)
+ * - offset: number (default: 0)
+ */
+router.get(
+  '/jobs/:jobId/emails',
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user!.id;
+    const { jobId } = req.params;
+
+    try {
+      const job = await getBulkJob(jobId);
+
+      if (!job) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+
+      if (job.userId !== userId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const status = (req.query.status as string) || 'all';
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 100);
+      const offset = parseInt(req.query.offset as string, 10) || 0;
+
+      const result = await getBulkJobEmails(jobId, { status, limit, offset });
+
+      return res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/bulk/jobs/:jobId
+ *
+ * Rename a bulk job
+ */
+router.patch(
+  '/jobs/:jobId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user!.id;
+    const { jobId } = req.params;
+    const { filename } = req.body;
+
+    if (!filename || typeof filename !== 'string') {
+      return res.status(400).json({ error: 'filename is required' });
+    }
+
+    try {
+      const updated = await renameBulkJob(jobId, userId, filename);
+
+      if (!updated) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+
+      return res.json({ job: updated });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/bulk/jobs/:jobId
+ *
+ * Delete a bulk job and all its results
+ */
+router.delete(
+  '/jobs/:jobId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    const userId = req.user!.id;
+    const { jobId } = req.params;
+
+    try {
+      const deleted = await deleteBulkJob(jobId, userId);
+
+      if (!deleted) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
+
+      return res.json({ success: true });
     } catch (error) {
       next(error);
     }

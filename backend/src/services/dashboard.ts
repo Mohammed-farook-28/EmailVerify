@@ -258,3 +258,70 @@ export async function getVerificationTrend(
     throw new Error('Failed to retrieve verification trend');
   }
 }
+
+/**
+ * Usage by status data point (daily verification counts by status)
+ */
+export interface UsageByStatusDataPoint {
+  date: string; // YYYY-MM-DD
+  valid: number;
+  invalid: number;
+  risky: number;
+  unknown: number;
+}
+
+/**
+ * Get daily verification counts broken down by status
+ *
+ * @param userId - User ID
+ * @param rangeDays - Time range in days (7, 30, or 90)
+ * @returns Array of daily data points with per-status counts
+ */
+export async function getUsageByStatus(
+  userId: string,
+  rangeDays: number = 7
+): Promise<UsageByStatusDataPoint[]> {
+  if (!Number.isInteger(rangeDays) || rangeDays < 1 || rangeDays > 365) {
+    throw new Error('rangeDays must be an integer between 1 and 365');
+  }
+
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
+
+  try {
+    const rows = await db
+      .select({
+        date: sql<string>`DATE(${verificationResult.createdAt})`,
+        status: verificationResult.status,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(verificationResult)
+      .where(
+        and(
+          eq(verificationResult.userId, userId),
+          gte(verificationResult.createdAt, cutoffDate)
+        )
+      )
+      .groupBy(sql`DATE(${verificationResult.createdAt})`, verificationResult.status)
+      .orderBy(sql`DATE(${verificationResult.createdAt}) ASC`)
+      .execute();
+
+    // Pivot rows into { date, valid, invalid, risky, unknown }
+    const dateMap = new Map<string, UsageByStatusDataPoint>();
+
+    for (const row of rows) {
+      if (!dateMap.has(row.date)) {
+        dateMap.set(row.date, { date: row.date, valid: 0, invalid: 0, risky: 0, unknown: 0 });
+      }
+      const entry = dateMap.get(row.date)!;
+      if (row.status === 'valid') entry.valid = row.count;
+      else if (row.status === 'invalid') entry.invalid = row.count;
+      else if (row.status === 'risky') entry.risky = row.count;
+      else if (row.status === 'unknown') entry.unknown = row.count;
+    }
+
+    return Array.from(dateMap.values());
+  } catch (error: any) {
+    throw new Error('Failed to retrieve usage by status');
+  }
+}

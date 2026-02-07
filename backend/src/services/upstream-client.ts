@@ -3,6 +3,10 @@
  *
  * Uses undici for high-performance HTTP requests with connection pooling.
  * Implements idempotency key generation to prevent duplicate charges.
+ *
+ * Supports two modes:
+ * - Mock API (localhost:8080): Uses POST /verify/single with same response format
+ * - Real EmailVerify.ai API: Uses POST /verify/single with EMAILVERIFY-API-KEY header
  */
 
 import { Pool, request } from 'undici';
@@ -14,8 +18,11 @@ import { activeConnections, connectionPoolSize } from '../lib/metrics.js';
 // Configure connection pool
 const UPSTREAM_API_URL = process.env.UPSTREAM_API_URL || 'http://localhost:8080';
 const UPSTREAM_API_KEY = process.env.UPSTREAM_API_KEY || 'mock-api-key';
+const IS_MOCK = UPSTREAM_API_URL.includes('localhost');
 
-const pool = new Pool(UPSTREAM_API_URL, {
+// Pool needs just the origin (scheme + host), not the path
+const upstreamOrigin = new URL(UPSTREAM_API_URL).origin;
+const pool = new Pool(upstreamOrigin, {
   connections: 200, // Max connections
   pipelining: 1, // Disable pipelining for now
   keepAliveTimeout: 60_000, // 60s
@@ -47,6 +54,72 @@ export interface VerificationResult {
     processingTime: number;
     requestId: string;
     timestamp: string;
+  };
+}
+
+/** Raw response shape from the real EmailVerify.ai API (nested under `data`) */
+interface UpstreamApiResponse {
+  success: boolean;
+  code: string;
+  message: string;
+  data: UpstreamRawResponse;
+}
+
+interface UpstreamRawResponse {
+  email: string;
+  status: string;
+  score: number;
+  is_deliverable: boolean;
+  is_disposable: boolean;
+  is_catchall: boolean;
+  is_role: boolean;
+  is_free: boolean;
+  domain: string;
+  mx_records: string[];
+  smtp_check: boolean;
+  reason: string;
+  response_time: number;
+  credits_used: number;
+}
+
+/**
+ * Map real EmailVerify.ai response to our internal VerificationResult format
+ */
+function mapUpstreamResponse(raw: UpstreamRawResponse): VerificationResult {
+  // Map upstream status strings to our 4-value enum
+  // The upstream API returns extra statuses like 'role', 'disposable', 'catch-all'
+  const statusMap: Record<string, VerificationResult['status']> = {
+    valid: 'valid',
+    invalid: 'invalid',
+    risky: 'risky',
+    unknown: 'unknown',
+    role: 'risky',
+    disposable: 'invalid',
+    'catch-all': 'risky',
+    'catch_all': 'risky',
+    spamtrap: 'invalid',
+    abuse: 'risky',
+    'do_not_mail': 'invalid',
+  };
+
+  return {
+    email: raw.email,
+    status: statusMap[raw.status] || 'unknown',
+    score: raw.score,
+    deliverability: raw.is_deliverable ? 'deliverable' : (raw.status === 'risky' ? 'risky' : (raw.status === 'unknown' ? 'unknown' : 'undeliverable')),
+    attributes: {
+      disposable: raw.is_disposable,
+      freeProvider: raw.is_free,
+      roleAccount: raw.is_role,
+      catchAll: raw.is_catchall,
+      mxRecordsFound: Array.isArray(raw.mx_records) && raw.mx_records.length > 0,
+      smtpValid: raw.smtp_check,
+    },
+    serverInfo: {
+      processingTime: raw.response_time,
+      requestId: `upstream-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      timestamp: new Date().toISOString(),
+    },
   };
 }
 
@@ -102,6 +175,9 @@ async function storeIdempotentResult(key: string, result: VerificationResult): P
 /**
  * Call upstream email verification API
  *
+ * Supports both mock (localhost) and real EmailVerify.ai API.
+ * Mock uses our internal format directly; real API response is mapped.
+ *
  * @param email - Email to verify
  * @param userId - User making the request
  * @returns Verification result
@@ -121,21 +197,33 @@ export async function callUpstreamAPI(
 
   const startTime = Date.now();
 
+  // Build request based on whether we're using mock or real API
+  const endpoint = `${UPSTREAM_API_URL}/verify/single`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (IS_MOCK) {
+    headers['Authorization'] = `Bearer ${UPSTREAM_API_KEY}`;
+  } else {
+    headers['EMAILVERIFY-API-KEY'] = UPSTREAM_API_KEY;
+  }
+
+  const body = IS_MOCK
+    ? JSON.stringify({ email })
+    : JSON.stringify({ email, check_smtp: true });
+
   try {
     activeConnections.inc();
 
     const response = await request(
-      `${UPSTREAM_API_URL}/verify`,
+      endpoint,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${UPSTREAM_API_KEY}`,
-          'X-Idempotency-Key': idempotencyKey,
-        },
-        body: JSON.stringify({ email, idempotencyKey }),
-        bodyTimeout: 10_000, // 10s read timeout
-        headersTimeout: 3_000, // 3s connect timeout
+        headers,
+        body,
+        bodyTimeout: 15_000, // 15s read timeout
+        headersTimeout: 10_000, // 10s connect timeout
       }
     );
 
@@ -156,7 +244,19 @@ export async function callUpstreamAPI(
       throw new Error(`Upstream API error: ${response.statusCode} - ${errorText}`);
     }
 
-    const result = await response.body.json() as VerificationResult;
+    const rawResult = await response.body.json();
+
+    // Map response: mock returns our format directly, real API wraps in { success, data }
+    let result: VerificationResult;
+    if (IS_MOCK) {
+      result = rawResult as VerificationResult;
+    } else {
+      const apiResponse = rawResult as UpstreamApiResponse;
+      if (!apiResponse.success || !apiResponse.data) {
+        throw new Error(`Upstream API error: ${apiResponse.message || 'Unknown error'}`);
+      }
+      result = mapUpstreamResponse(apiResponse.data);
+    }
 
     logger.info(
       {

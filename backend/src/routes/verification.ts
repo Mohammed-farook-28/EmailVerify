@@ -9,10 +9,11 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
+import { sseMiddleware, sendSSEEvent } from '../middleware/sse.js';
 import { logger, createLogger } from '../config/logger.js';
 import { deductCredits, getBalance, refundCredits } from '../services/credit.js';
 import { enqueueSingleVerification, isQueueOverloaded } from '../services/queue.js';
-import { getRecentVerifications } from '../services/verification.js';
+import { getRecentVerifications, getVerificationByEmailSince } from '../services/verification.js';
 import { incrementLoadSheddingCounter } from '../lib/metrics.js';
 
 const router = Router();
@@ -84,11 +85,12 @@ router.post('/quick-verify', async (req: Request, res: Response) => {
       const newBalance = await deductCredits(userId, 1, jobId);
 
       // Enqueue verification job
-      await enqueueSingleVerification(email, userId);
+      const queueJobId = await enqueueSingleVerification(email, userId);
 
       requestLogger.info(
         {
           jobId,
+          queueJobId,
           newBalance,
           email,
         },
@@ -97,7 +99,7 @@ router.post('/quick-verify', async (req: Request, res: Response) => {
 
       return res.json({
         success: true,
-        jobId,
+        jobId: queueJobId,
         email,
         creditsDeducted: 1,
         newBalance,
@@ -138,31 +140,39 @@ router.post('/quick-verify', async (req: Request, res: Response) => {
  *
  * Query params:
  * - limit: number (default: 10, max: 100)
+ * - offset: number (default: 0)
  *
  * Response:
- * - 200: Array of verification results
+ * - 200: { success, results, count, total, page, totalPages }
  */
 router.get('/quick-verify/recent', async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const limit = Math.min(parseInt(req.query.limit as string, 10) || 10, 100);
+  const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
 
   const requestLogger = createLogger({
     userId,
     operation: 'get-recent-verifications',
     limit,
+    offset,
   });
 
   try {
     requestLogger.info('Fetching recent verifications');
 
-    const results = await getRecentVerifications(userId, limit);
+    const { results, total } = await getRecentVerifications(userId, limit, offset);
+    const page = Math.floor(offset / limit) + 1;
+    const totalPages = Math.ceil(total / limit);
 
-    requestLogger.info({ count: results.length }, 'Retrieved recent verifications');
+    requestLogger.info({ count: results.length, total }, 'Retrieved recent verifications');
 
     return res.json({
       success: true,
       results,
       count: results.length,
+      total,
+      page,
+      totalPages,
     });
   } catch (error: any) {
     requestLogger.error(
@@ -174,6 +184,61 @@ router.get('/quick-verify/recent', async (req: Request, res: Response) => {
       message: 'Failed to retrieve verification results',
     });
   }
+});
+
+/**
+ * GET /home/quick-verify/stream?email=xxx&since=ISO
+ *
+ * SSE stream that waits for a single verification result.
+ * Polls the DB every 1s until the result appears or 30s timeout.
+ *
+ * Events:
+ * - waiting: Still processing
+ * - result: Verification result (final)
+ * - error: Timeout or failure
+ */
+router.get('/quick-verify/stream', sseMiddleware, async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const email = req.query.email as string;
+  const since = req.query.since as string;
+
+  if (!email || !since) {
+    sendSSEEvent(res, 'error', { error: 'Missing email or since parameter' });
+    return res.end();
+  }
+
+  const sinceDate = new Date(since);
+
+  sendSSEEvent(res, 'waiting', { email, status: 'processing' });
+
+  let attempt = 0;
+  const maxAttempts = 30;
+
+  const pollInterval = setInterval(async () => {
+    attempt++;
+
+    try {
+      const result = await getVerificationByEmailSince(userId, email, sinceDate);
+
+      if (result) {
+        clearInterval(pollInterval);
+        sendSSEEvent(res, 'result', result);
+        return res.end();
+      }
+
+      if (attempt >= maxAttempts) {
+        clearInterval(pollInterval);
+        sendSSEEvent(res, 'error', { error: 'Timeout waiting for result' });
+        return res.end();
+      }
+    } catch (error: any) {
+      logger.error({ error: error.message, email, userId }, 'Error polling for result');
+    }
+  }, 1000);
+
+  req.on('close', () => {
+    clearInterval(pollInterval);
+  });
 });
 
 export default router;

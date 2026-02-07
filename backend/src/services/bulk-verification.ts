@@ -1,6 +1,6 @@
 import { db } from '../db/index.js';
 import { bulkJob, bulkVerificationResult } from '../db/schema.js';
-import { eq, and, or, sql } from 'drizzle-orm';
+import { eq, and, or, sql, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { deductCredits } from './credit.js';
 import { parseEmailFile } from './file-parser.js';
@@ -163,6 +163,21 @@ export async function createBulkJob(
 }
 
 /**
+ * Get all bulk jobs for a user, ordered by most recent first
+ */
+export async function getUserBulkJobs(userId: string, limit = 50, offset = 0) {
+  const jobs = await db
+    .select()
+    .from(bulkJob)
+    .where(eq(bulkJob.userId, userId))
+    .orderBy(sql`${bulkJob.createdAt} DESC`)
+    .limit(limit)
+    .offset(offset);
+
+  return jobs;
+}
+
+/**
  * Get bulk job by ID
  */
 export async function getBulkJob(jobId: string) {
@@ -220,4 +235,67 @@ export async function updateBulkJobStatus(
   }
 
   await db.update(bulkJob).set(updateData).where(eq(bulkJob.id, jobId));
+}
+
+/**
+ * Get paginated email results for a bulk job
+ */
+export async function getBulkJobEmails(
+  jobId: string,
+  params: { status?: string; limit?: number; offset?: number }
+) {
+  const { status = 'all', limit = 50, offset = 0 } = params;
+
+  const conditions = [eq(bulkVerificationResult.jobId, jobId)];
+  if (status !== 'all') {
+    conditions.push(eq(bulkVerificationResult.status, status));
+  }
+
+  const [emails, countResult] = await Promise.all([
+    db
+      .select()
+      .from(bulkVerificationResult)
+      .where(and(...conditions))
+      .orderBy(desc(bulkVerificationResult.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(bulkVerificationResult)
+      .where(and(...conditions))
+      .execute(),
+  ]);
+
+  const total = countResult[0]?.count || 0;
+
+  return {
+    emails,
+    total,
+    hasMore: offset + limit < total,
+  };
+}
+
+/**
+ * Rename a bulk job
+ */
+export async function renameBulkJob(jobId: string, userId: string, filename: string) {
+  const result = await db
+    .update(bulkJob)
+    .set({ filename })
+    .where(and(eq(bulkJob.id, jobId), eq(bulkJob.userId, userId)))
+    .returning();
+
+  return result[0] || null;
+}
+
+/**
+ * Delete a bulk job (cascades to bulk_verification_result)
+ */
+export async function deleteBulkJob(jobId: string, userId: string) {
+  const result = await db
+    .delete(bulkJob)
+    .where(and(eq(bulkJob.id, jobId), eq(bulkJob.userId, userId)))
+    .returning({ id: bulkJob.id });
+
+  return result.length > 0;
 }

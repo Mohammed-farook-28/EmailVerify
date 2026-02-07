@@ -93,16 +93,22 @@ export async function generateAndUploadResults(jobId: string): Promise<string> {
     const s3Key = generateResultKey(jobId);
 
     // Upload to S3
-    await uploadToSpaces(s3Key, csvBuffer, 'text/csv');
+    try {
+      await uploadToSpaces(s3Key, csvBuffer, 'text/csv');
 
-    logger.info({ jobId, s3Key }, 'Uploaded results to S3');
+      logger.info({ jobId, s3Key }, 'Uploaded results to S3');
 
-    // Generate pre-signed URL (valid for 7 days)
-    const presignedUrl = await generatePresignedUrl(s3Key);
+      // Generate pre-signed URL (valid for 7 days)
+      const presignedUrl = await generatePresignedUrl(s3Key);
 
-    logger.info({ jobId, presignedUrl }, 'Generated pre-signed URL');
+      logger.info({ jobId, presignedUrl }, 'Generated pre-signed URL');
 
-    return presignedUrl;
+      return presignedUrl;
+    } catch (s3Error: any) {
+      // In dev mode with test credentials, S3 upload will fail — don't crash the job
+      logger.warn({ jobId, error: s3Error.message }, 'S3 upload failed, results available via API only');
+      return '';
+    }
   } catch (error: any) {
     logger.error({ jobId, error }, 'Failed to generate and upload results');
     throw error;

@@ -1,0 +1,71 @@
+
+
+
+
+old env - 
+# Server
+PORT=3000
+NODE_ENV=development
+FRONTEND_URL=http://localhost:3001
+BACKEND_URL=http://localhost:3000
+
+
+
+# Redis
+REDIS_URL=redis://localhost:6379
+
+# Auth
+BETTER_AUTH_BASE_URL=http://localhost:3000
+SESSION_SECRET=91a5b0839bd8b95641ca680343d05fe8edf994b3cddb49d6607231e03a937a8d
+CSRF_SECRET=c43cf1d92bf9e70140369951e6ad098e8109605ab1ea9679ab1e460b5fc2f71c
+GOOGLE_CLIENT_ID=<from-google-console>
+GOOGLE_CLIENT_SECRET=<from-google-console>
+GOOGLE_CALLBACK_URL=http://localhost:3000/api/auth/callback/google
+
+# Email
+RESEND_API_KEY=re_buod5E8M_4prdesfChGUr4VKgXybKWrMS
+FROM_EMAIL=hello@xquare.vc
+
+# Storage (Optional - for avatar uploads)
+DO_SPACES_KEY=test
+DO_SPACES_SECRET=test
+DO_SPACES_BUCKET=emailkit-avatars
+DO_SPACES_REGION=nyc3
+DO_SPACES_CDN_URL=https://emailkit-avatars.nyc3.cdn.digitaloceanspaces.com
+
+# DigitalOcean Spaces (for bulk verification results)
+SPACES_ENDPOINT=https://nyc3.digitaloceanspaces.com
+SPACES_REGION=nyc3
+SPACES_ACCESS_KEY=test
+SPACES_SECRET_KEY=test
+SPACES_BUCKET=emailkit-bulk-results
+
+# Credits
+SIGNUP_BONUS_CREDITS=100
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_placeholder
+STRIPE_PUBLISHABLE_KEY=pk_test_placeholder
+STRIPE_WEBHOOK_SECRET=whsec_placeholder
+
+# Email Verification
+UPSTREAM_API_URL=http://localhost:8080
+UPSTREAM_API_KEY=mock-api-key
+WORKER_CONCURRENCY=50
+
+# OpenTelemetry (optional - disable if not using Grafana)
+OTEL_ENABLED=false
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+
+# Redis (for BullMQ)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+# REDIS_PASSWORD=
+
+# Bulk Verification
+MAX_FILE_SIZE=10485760
+MAX_EMAILS=100000
+BATCH_SIZE=100
+RETENTION_DAYS=14
+
+
