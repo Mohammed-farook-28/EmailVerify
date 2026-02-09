@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
 import { sseMiddleware, sendSSEEvent } from '../middleware/sse.js';
 import { logger, createLogger } from '../config/logger.js';
+import { pubsub } from '../config/redis.js';
 import { deductCredits, getBalance, refundCredits } from '../services/credit.js';
 import { enqueueSingleVerification, isQueueOverloaded } from '../services/queue.js';
 import { getRecentVerifications, getVerificationByEmailSince } from '../services/verification.js';
@@ -84,8 +85,15 @@ router.post('/quick-verify', async (req: Request, res: Response) => {
     try {
       const newBalance = await deductCredits(userId, 1, jobId);
 
-      // Enqueue verification job
-      const queueJobId = await enqueueSingleVerification(email, userId);
+      // Enqueue verification job — refund if enqueue fails
+      let queueJobId: string;
+      try {
+        queueJobId = await enqueueSingleVerification(email, userId);
+      } catch (enqueueError) {
+        requestLogger.error({ error: enqueueError }, 'Enqueue failed, refunding credit');
+        await refundCredits(userId, 1, `enqueue_failed:${jobId}`);
+        throw enqueueError;
+      }
 
       requestLogger.info(
         {
@@ -208,39 +216,55 @@ router.get('/quick-verify/stream', sseMiddleware, async (req: Request, res: Resp
   }
 
   const sinceDate = new Date(since);
+  const normalizedEmail = email.toLowerCase();
 
   sendSSEEvent(res, 'waiting', { email, status: 'processing' });
 
-  let attempt = 0;
-  const maxAttempts = 30;
-
-  const pollInterval = setInterval(async () => {
-    attempt++;
-
-    try {
-      const result = await getVerificationByEmailSince(userId, email, sinceDate);
-
-      if (result) {
-        clearInterval(pollInterval);
-        sendSSEEvent(res, 'result', result);
-        return res.end();
-      }
-
-      if (attempt >= maxAttempts) {
-        clearInterval(pollInterval);
-        sendSSEEvent(res, 'error', { error: 'Timeout waiting for result' });
-        return res.end();
-      }
-    } catch (error: any) {
-      clearInterval(pollInterval);
-      logger.error({ error: error.message, email, userId }, 'Error polling for result');
-      sendSSEEvent(res, 'error', { error: 'Internal error while polling' });
-      res.end();
+  // Check once immediately — result may already exist
+  try {
+    const existing = await getVerificationByEmailSince(userId, email, sinceDate);
+    if (existing) {
+      sendSSEEvent(res, 'result', existing);
+      return res.end();
     }
-  }, 1000);
+  } catch (error: any) {
+    logger.error({ error: error.message, email, userId }, 'Error checking existing result');
+    sendSSEEvent(res, 'error', { error: 'Internal error' });
+    return res.end();
+  }
+
+  // Subscribe to Redis pub/sub channel for this user's results
+  const channel = `verify:result:${userId}`;
+
+  const handler = (_ch: string, message: string) => {
+    try {
+      const data = JSON.parse(message);
+      if (data.email.toLowerCase() === normalizedEmail) {
+        cleanup();
+        sendSSEEvent(res, 'result', data.result);
+        res.end();
+      }
+    } catch (err) {
+      logger.error({ err, channel }, 'Error parsing pub/sub message');
+    }
+  };
+
+  pubsub.subscribe(channel, handler);
+
+  // Timeout fallback (30s)
+  const timeout = setTimeout(() => {
+    cleanup();
+    sendSSEEvent(res, 'error', { error: 'Timeout waiting for result' });
+    res.end();
+  }, 30_000);
+
+  function cleanup() {
+    clearTimeout(timeout);
+    pubsub.unsubscribe(channel, handler);
+  }
 
   req.on('close', () => {
-    clearInterval(pollInterval);
+    cleanup();
   });
 });
 

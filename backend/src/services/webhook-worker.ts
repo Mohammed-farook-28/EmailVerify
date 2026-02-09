@@ -116,7 +116,7 @@ async function deliverWebhook(
 
   // T047: Sign payload with HMAC-SHA256
   const timestamp = Math.floor(Date.now() / 1000);
-  const signature = signWebhookPayload(payloadString, webhook.secretHash, timestamp);
+  const signature = signWebhookPayload(payloadString, webhook.signingSecret, timestamp);
 
   const startTime = Date.now();
 

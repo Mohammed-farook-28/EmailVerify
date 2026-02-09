@@ -20,6 +20,7 @@
 import { Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { nanoid } from 'nanoid';
+import pLimit from 'p-limit';
 import { db } from '../db/index.js';
 import { bulkVerificationResult, verificationResult } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
@@ -110,8 +111,10 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
       // Check circuit breaker state
       const circuitOpen = await isCircuitOpen();
 
-      // Process each email in the batch
-      for (const result of batch) {
+      // Process emails in parallel (10 concurrent verifications per batch)
+      const limit = pLimit(10);
+
+      const promises = batch.map((result) => limit(async () => {
         try {
           let upstreamResult: UpstreamResult;
 
@@ -182,7 +185,7 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
             serverInfo: { ...upstreamResult.serverInfo, method: 'bulk', bulkJobId: jobId },
           });
 
-          // Update counts
+          // Update counts (JS is single-threaded, safe after await)
           processedCount++;
           switch (upstreamResult.status) {
             case 'valid':
@@ -232,7 +235,9 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
           processedCount++;
           unknownCount++;
         }
-      }
+      }));
+
+      await Promise.allSettled(promises);
 
       // Calculate progress
       const currentPercentage = Math.round(

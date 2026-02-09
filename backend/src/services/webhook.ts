@@ -7,9 +7,9 @@
 
 import { db } from '../db/index.js';
 import { webhook, webhookDelivery, user, type Webhook, type NewWebhook } from '../db/schema.js';
-import { eq, and, count, desc } from 'drizzle-orm';
+import { eq, and, count, desc, lt, inArray } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { generateWebhookSecret, hashSecret, getSecretPrefix } from '../lib/hmac.js';
+import { generateWebhookSecret, getSecretPrefix } from '../lib/hmac.js';
 import { logger } from '../config/logger.js';
 import { sendWebhookPausedNotification } from './email.js';
 
@@ -152,7 +152,6 @@ export async function createWebhook(params: CreateWebhookParams): Promise<Create
 
   // T039: Generate signing secret
   const secret = generateWebhookSecret();
-  const secretHash = hashSecret(secret);
   const secretPrefix = getSecretPrefix(secret);
 
   // Create webhook record
@@ -163,7 +162,7 @@ export async function createWebhook(params: CreateWebhookParams): Promise<Create
     id: webhookId,
     userId,
     url,
-    secretHash,
+    signingSecret: secret,
     secretPrefix,
     events: events as any, // JSONB
     payloadMode,
@@ -197,23 +196,20 @@ export async function listWebhooks(
   cursor?: string,
   limit: number = 20
 ): Promise<{ webhooks: WebhookListItem[]; nextCursor: string | null }> {
-  let query = db
-    .select()
-    .from(webhook)
-    .where(eq(webhook.userId, userId))
-    .orderBy(desc(webhook.createdAt))
-    .limit(limit + 1);
+  let whereClause = eq(webhook.userId, userId);
 
   // Apply cursor if provided (cursor is the createdAt timestamp)
   if (cursor) {
     const cursorDate = new Date(Buffer.from(cursor, 'base64').toString('utf-8'));
-    query = db
-      .select()
-      .from(webhook)
-      .where(and(eq(webhook.userId, userId)))
-      .orderBy(desc(webhook.createdAt))
-      .limit(limit + 1);
+    whereClause = and(eq(webhook.userId, userId), lt(webhook.createdAt, cursorDate)) as any;
   }
+
+  const query = db
+    .select()
+    .from(webhook)
+    .where(whereClause)
+    .orderBy(desc(webhook.createdAt))
+    .limit(limit + 1);
 
   const webhooks = await query;
 
@@ -430,7 +426,7 @@ export async function getWebhooksForEvent(
   const webhooks = await db.query.webhook.findMany({
     where: and(
       eq(webhook.userId, userId),
-      eq(webhook.status, 'active')
+      inArray(webhook.status, ['active', 'failing'])
     ),
   });
 

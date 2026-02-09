@@ -138,14 +138,15 @@ async function processSubscriptionRenewal(subscription: any): Promise<void> {
     return;
   }
 
-  // Wrap expire + add + update in a transaction for atomicity
+  // Wrap expire + add + update in a single transaction for atomicity
   await db.transaction(async (tx) => {
     // 1. Expire old subscription credits from previous period
     await expireSubscriptionCredits(
       subscription.userId,
       planCredits,
       subscription.stripeSubscriptionId,
-      subscription.currentPeriodEnd
+      subscription.currentPeriodEnd,
+      tx
     );
     logger.info(
       { userId: subscription.userId, credits: planCredits },
@@ -158,7 +159,8 @@ async function processSubscriptionRenewal(subscription: any): Promise<void> {
       planCredits,
       subscription.planId,
       subscription.stripeSubscriptionId,
-      newPeriodEnd
+      newPeriodEnd,
+      tx
     );
 
     // 3. Update local subscription record with new period

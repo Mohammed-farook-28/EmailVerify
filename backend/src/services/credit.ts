@@ -6,6 +6,9 @@ import { nanoid } from 'nanoid';
 import { redis } from '../config/redis.js';
 import { logger } from '../config/logger.js';
 
+/** Transaction-or-DB type for passing an existing transaction */
+export type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 /**
  * Award signup bonus credits to a new user
  */
@@ -259,9 +262,10 @@ export async function addSubscriptionCredits(
   amount: number,
   planId: string,
   subscriptionId: string,
-  periodEnd: Date
+  periodEnd: Date,
+  existingTx?: DbOrTx
 ): Promise<number> {
-  return await db.transaction(async (tx) => {
+  const execute = async (tx: DbOrTx) => {
     const idempotencyKey = `subscription:${subscriptionId}:${periodEnd.getTime()}`;
 
     // Check if already processed (idempotency)
@@ -303,7 +307,12 @@ export async function addSubscriptionCredits(
     await redis.set(`credit:balance:${userId}`, newBalance.toString());
 
     return newBalance;
-  });
+  };
+
+  if (existingTx) {
+    return execute(existingTx);
+  }
+  return await db.transaction(async (tx) => execute(tx));
 }
 
 /**
@@ -319,9 +328,10 @@ export async function expireSubscriptionCredits(
   userId: string,
   amount: number,
   subscriptionId: string,
-  periodEnd: Date
+  periodEnd: Date,
+  existingTx?: DbOrTx
 ): Promise<number> {
-  return await db.transaction(async (tx) => {
+  const execute = async (tx: DbOrTx) => {
     const idempotencyKey = `expire:${subscriptionId}:${periodEnd.getTime()}`;
 
     // Check if already processed (idempotency)
@@ -344,13 +354,15 @@ export async function expireSubscriptionCredits(
       .for('update');
 
     const currentBalance = latestEvent[0]?.balanceAfter ?? 0;
-    const newBalance = Math.max(0, currentBalance - amount);
+    // Fix 6: Record actual deduction, not requested amount
+    const actualDeduction = Math.min(amount, currentBalance);
+    const newBalance = currentBalance - actualDeduction;
 
     await tx.insert(creditEvent).values({
       id: nanoid(),
       userId,
       type: 'expire',
-      amount: -amount,
+      amount: -actualDeduction,
       balanceAfter: newBalance,
       referenceType: 'subscription',
       referenceId: subscriptionId,
@@ -363,5 +375,10 @@ export async function expireSubscriptionCredits(
     await redis.set(`credit:balance:${userId}`, newBalance.toString());
 
     return newBalance;
-  });
+  };
+
+  if (existingTx) {
+    return execute(existingTx);
+  }
+  return await db.transaction(async (tx) => execute(tx));
 }

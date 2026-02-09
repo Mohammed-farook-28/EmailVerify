@@ -271,7 +271,7 @@ export const webhook = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
     url: text('url').notNull(), // HTTPS endpoint URL
-    secretHash: text('secret_hash').notNull(), // SHA-256 hash of signing secret
+    signingSecret: text('signing_secret').notNull(), // Raw signing secret for HMAC
     secretPrefix: text('secret_prefix').notNull(), // First 12 chars (e.g., `whsec_abc123`)
     events: jsonb('events').notNull(), // Array of subscribed event types
     payloadMode: text('payload_mode').notNull().default('full'), // 'full' or 'summary'

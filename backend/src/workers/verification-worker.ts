@@ -20,6 +20,7 @@ import IORedis from 'ioredis';
 import { nanoid } from 'nanoid';
 import { db } from '../db/index.js';
 import { verificationResult } from '../db/schema.js';
+import { redis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
 import { verifyWithCircuitBreaker, isCircuitOpen } from '../services/circuit-breaker.js';
 import { jobProcessingDuration, verificationCounter, verificationDuration, verificationErrorRate } from '../lib/metrics.js';
@@ -75,7 +76,7 @@ async function processVerificationJob(job: Job<VerificationJobData>): Promise<Up
     // Store result in PostgreSQL
     const resultId = nanoid();
     const method = jobType === 'bulk' ? 'bulk' : 'web';
-    await db.insert(verificationResult).values({
+    const storedResult = {
       id: resultId,
       userId,
       email: email.toLowerCase(),
@@ -84,6 +85,15 @@ async function processVerificationJob(job: Job<VerificationJobData>): Promise<Up
       deliverability: result.deliverability,
       attributes: result.attributes,
       serverInfo: { ...result.serverInfo, method },
+    };
+    await db.insert(verificationResult).values(storedResult);
+
+    // Publish result via Redis pub/sub for SSE listeners
+    await redis.publish(
+      `verify:result:${userId}`,
+      JSON.stringify({ email: email.toLowerCase(), result: storedResult })
+    ).catch((err) => {
+      jobLogger.warn({ err }, 'Failed to publish result to Redis pub/sub');
     });
 
     await job.updateProgress(100);
