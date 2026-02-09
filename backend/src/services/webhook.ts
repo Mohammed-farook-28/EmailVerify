@@ -88,10 +88,10 @@ export async function sendTestPing(url: string): Promise<{ success: boolean; err
     },
   };
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TEST_PING_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TEST_PING_TIMEOUT_MS);
 
+  try {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -102,8 +102,6 @@ export async function sendTestPing(url: string): Promise<{ success: boolean; err
       body: JSON.stringify(testPayload),
       signal: controller.signal,
     });
-
-    clearTimeout(timeout);
 
     if (response.ok) {
       return { success: true, statusCode: response.status };
@@ -119,6 +117,8 @@ export async function sendTestPing(url: string): Promise<{ success: boolean; err
       return { success: false, error: 'Request timed out after 5 seconds' };
     }
     return { success: false, error: err.message || 'Connection failed' };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

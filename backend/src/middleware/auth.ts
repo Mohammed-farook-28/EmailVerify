@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { auth } from '../lib/auth.js';
 import { fromNodeHeaders } from 'better-auth/node';
+import { logger } from '../config/logger.js';
 
 // Better Auth session and user types
 type BetterAuthSession = {
@@ -58,7 +59,7 @@ export async function requireAuth(
 
     next();
   } catch (error) {
-    console.error('Auth middleware error:', error);
+    logger.error({ error }, 'Auth middleware error');
     res.status(401).json({ error: 'Authentication failed' });
   }
 }

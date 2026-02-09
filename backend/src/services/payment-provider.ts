@@ -21,16 +21,14 @@ export interface PaymentProvider {
   /**
    * Create a checkout session for one-time credit purchase
    * @param customerId - Stripe customer ID
-   * @param packageId - Package identifier (e.g., "1K", "5K", "10K")
-   * @param priceId - Stripe price ID for the package
-   * @param quantity - Number of packages (usually 1)
+   * @param credits - Number of credits to purchase
+   * @param amountCents - Price in cents
    * @returns Checkout session ID and URL
    */
   createOneTimeCheckout(
     customerId: string,
-    packageId: string,
-    priceId: string,
-    quantity?: number
+    credits: number,
+    amountCents: number
   ): Promise<{ sessionId: string; url: string }>;
 
   /**

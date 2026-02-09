@@ -8,3 +8,7 @@ export const redis = new IORedis.default(env.redisUrl, {
     return delay;
   },
 });
+
+export async function closeRedis(): Promise<void> {
+  await redis.quit();
+}

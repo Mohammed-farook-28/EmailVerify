@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import * as UserProfileService from '../services/user-profile.js';
 import * as CreditService from '../services/credit.js';
+import { logger } from '../config/logger.js';
 
 const router = Router();
 
@@ -32,7 +33,7 @@ router.put('/profile/name', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error('Update name error:', error);
+    logger.error({ error }, 'Update name error');
     res.status(500).json({ error: 'Failed to update name' });
   }
 });
@@ -80,7 +81,7 @@ router.get('/profile', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error('Get profile error:', error);
+    logger.error({ error }, 'Get profile error');
     res.status(500).json({ error: 'Failed to get profile' });
   }
 });

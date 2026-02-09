@@ -144,10 +144,15 @@ async function deliverWebhook(
     const durationMs = Date.now() - startTime;
     const success = response.ok;
 
-    // Get response body (truncated)
+    // Get response body (truncated, with 5s timeout to prevent hanging)
     let responseBody: string | undefined;
     try {
-      const text = await response.text();
+      const text = await Promise.race([
+        response.text(),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error('Body read timeout')), 5000)
+        ),
+      ]);
       responseBody = text.slice(0, 1000); // Truncate to 1KB
     } catch {
       // Ignore body read errors
@@ -256,7 +261,7 @@ function getSummary(payload: Record<string, any>): Record<string, any> {
   };
 }
 
-// Create worker
+// Create worker with custom backoff strategy
 export const webhookWorker = new Worker<WebhookDeliveryJob>(
   'webhook-delivery',
   async (job) => {
@@ -275,6 +280,11 @@ export const webhookWorker = new Worker<WebhookDeliveryJob>(
     limiter: {
       max: 100,
       duration: 1000, // 100 deliveries per second max
+    },
+    settings: {
+      backoffStrategy: (attemptsMade: number) => {
+        return RETRY_DELAYS_MS[attemptsMade] ?? 1800000;
+      },
     },
   }
 );

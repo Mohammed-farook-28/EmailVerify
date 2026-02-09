@@ -68,20 +68,29 @@ export const verification = pgTable('verification', {
 
 // Custom EmailKit Tables
 
-export const creditEvent = pgTable('credit_event', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => user.id, { onDelete: 'cascade' }),
-  type: text('type').notNull(), // 'signup_bonus', 'purchase', 'subscription', 'subscription_renewal', 'expire', 'verification_used', etc.
-  amount: integer('amount').notNull(), // Positive for credits, negative for deductions
-  balanceAfter: integer('balance_after').notNull(),
-  referenceType: text('reference_type'), // 'verification_job', 'payment', 'subscription', 'checkout_session', etc.
-  referenceId: text('reference_id'),
-  idempotencyKey: text('idempotency_key').unique(),
-  metadata: jsonb('metadata'), // Additional context (e.g., package, plan, expiration date)
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-});
+export const creditEvent = pgTable(
+  'credit_event',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    amount: integer('amount').notNull(),
+    balanceAfter: integer('balance_after').notNull(),
+    referenceType: text('reference_type'),
+    referenceId: text('reference_id'),
+    idempotencyKey: text('idempotency_key').unique(),
+    metadata: jsonb('metadata'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdCreatedAtIdx: index('credit_event_user_id_created_at_idx').on(
+      table.userId,
+      table.createdAt
+    ),
+  })
+);
 
 export const billingInfo = pgTable('billing_info', {
   userId: text('user_id')
@@ -115,6 +124,11 @@ export const verificationResult = pgTable(
       table.userId,
       table.createdAt
     ),
+    userIdEmailCreatedAtIdx: index('verification_result_user_id_email_created_at_idx').on(
+      table.userId,
+      table.email,
+      table.createdAt
+    ),
   })
 );
 
@@ -138,18 +152,24 @@ export const subscription = pgTable('subscription', {
 });
 
 // Checkout session tracking - for polling and reconciliation
-export const checkoutSession = pgTable('checkout_session', {
-  id: text('id').primaryKey(), // Stripe session ID
-  userId: text('user_id')
-    .notNull()
-    .references(() => user.id, { onDelete: 'cascade' }),
-  type: text('type').notNull(), // 'one_time_purchase' or 'subscription'
-  status: text('status').notNull(), // 'open', 'complete', 'expired'
-  paymentStatus: text('payment_status').notNull(), // 'paid', 'unpaid', 'no_payment_required'
-  metadata: jsonb('metadata').notNull(), // { packageId, planId, priceId, etc. }
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  completedAt: timestamp('completed_at'),
-});
+export const checkoutSession = pgTable(
+  'checkout_session',
+  {
+    id: text('id').primaryKey(), // Stripe session ID
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(), // 'one_time_purchase' or 'subscription'
+    status: text('status').notNull(), // 'open', 'complete', 'expired'
+    paymentStatus: text('payment_status').notNull(), // 'paid', 'unpaid', 'no_payment_required'
+    metadata: jsonb('metadata').notNull(), // { credits, planId, price, etc. }
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    completedAt: timestamp('completed_at'),
+  },
+  (table) => ({
+    userIdIdx: index('checkout_session_user_id_idx').on(table.userId),
+  })
+);
 
 // Webhook event idempotency - prevent duplicate processing
 export const processedWebhookEvent = pgTable('processed_webhook_event', {

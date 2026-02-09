@@ -14,6 +14,10 @@
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import pino from 'pino';
+
+// Dedicated logger for instrumentation (can't import app logger since this file loads first)
+const otelLogger = pino({ name: 'otel' });
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
@@ -53,20 +57,21 @@ const sdk = new NodeSDK({
 if (process.env.OTEL_ENABLED !== 'false') {
   sdk.start();
 
-  console.log('[OpenTelemetry] Instrumentation initialized');
-  console.log(`[OpenTelemetry] Service: emailkit-api`);
-  console.log(`[OpenTelemetry] Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`[OpenTelemetry] Sample ratio: ${sampleRatio * 100}%`);
-  console.log(`[OpenTelemetry] Exporter: ${process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318/v1/traces'}`);
+  otelLogger.info({
+    service: 'emailkit-api',
+    environment: process.env.NODE_ENV || 'development',
+    sampleRatio: `${sampleRatio * 100}%`,
+    exporter: process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318/v1/traces',
+  }, 'OpenTelemetry instrumentation initialized');
 }
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   try {
     await sdk.shutdown();
-    console.log('[OpenTelemetry] SDK shut down successfully');
+    otelLogger.info('OpenTelemetry SDK shut down successfully');
   } catch (error) {
-    console.error('[OpenTelemetry] Error shutting down SDK', error);
+    otelLogger.error({ error }, 'Error shutting down OpenTelemetry SDK');
   } finally {
     process.exit(0);
   }

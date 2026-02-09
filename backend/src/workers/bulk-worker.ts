@@ -174,7 +174,7 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
           await db.insert(verificationResult).values({
             id: nanoid(),
             userId,
-            email: result.email,
+            email: result.email.toLowerCase(),
             status: upstreamResult.status,
             score: upstreamResult.score,
             deliverability: upstreamResult.deliverability,
@@ -221,7 +221,7 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
           await db.insert(verificationResult).values({
             id: nanoid(),
             userId,
-            email: result.email,
+            email: result.email.toLowerCase(),
             status: 'unknown',
             score: 0,
             deliverability: 'unknown',

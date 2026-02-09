@@ -9,7 +9,7 @@
  * - Real EmailVerify.ai API: Uses POST /verify/single with EMAILVERIFY-API-KEY header
  */
 
-import { Pool, request } from 'undici';
+import { Pool } from 'undici';
 import { createHash } from 'crypto';
 import { redis } from '../config/redis.js';
 import { logger } from '../config/logger.js';
@@ -21,7 +21,10 @@ const UPSTREAM_API_KEY = process.env.UPSTREAM_API_KEY || 'mock-api-key';
 const IS_MOCK = UPSTREAM_API_URL.includes('localhost');
 
 // Pool needs just the origin (scheme + host), not the path
-const upstreamOrigin = new URL(UPSTREAM_API_URL).origin;
+const parsedUrl = new URL(UPSTREAM_API_URL);
+const upstreamOrigin = parsedUrl.origin;
+// Preserve path prefix (e.g. "/v1" from "https://api.emailverify.ai/v1")
+const upstreamPathPrefix = parsedUrl.pathname.replace(/\/+$/, ''); // strip trailing slash
 const pool = new Pool(upstreamOrigin, {
   connections: 200, // Max connections
   pipelining: 1, // Disable pipelining for now
@@ -125,7 +128,10 @@ function mapUpstreamResponse(raw: UpstreamRawResponse): VerificationResult {
 
 /**
  * Generate idempotency key for a verification request
- * Format: {userId}:{SHA256(email)}:{timestamp}
+ * Format: {userId}:{SHA256(email)}
+ *
+ * No timestamp — Redis TTL (1hr) handles expiration. Including Date.now()
+ * would make every request unique, defeating idempotency.
  *
  * @param email - Email to verify
  * @param userId - User making the request
@@ -133,8 +139,7 @@ function mapUpstreamResponse(raw: UpstreamRawResponse): VerificationResult {
  */
 function generateIdempotencyKey(email: string, userId: string): string {
   const emailHash = createHash('sha256').update(email.toLowerCase()).digest('hex');
-  const timestamp = Date.now();
-  return `${userId}:${emailHash}:${timestamp}`;
+  return `${userId}:${emailHash}`;
 }
 
 /**
@@ -198,16 +203,11 @@ export async function callUpstreamAPI(
   const startTime = Date.now();
 
   // Build request based on whether we're using mock or real API
-  const endpoint = `${UPSTREAM_API_URL}/verify/single`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
 
-  if (IS_MOCK) {
-    headers['Authorization'] = `Bearer ${UPSTREAM_API_KEY}`;
-  } else {
-    headers['EMAILVERIFY-API-KEY'] = UPSTREAM_API_KEY;
-  }
+  headers['Authorization'] = `Bearer ${UPSTREAM_API_KEY}`;
 
   const body = IS_MOCK
     ? JSON.stringify({ email })
@@ -216,16 +216,14 @@ export async function callUpstreamAPI(
   try {
     activeConnections.inc();
 
-    const response = await request(
-      endpoint,
-      {
-        method: 'POST',
-        headers,
-        body,
-        bodyTimeout: 15_000, // 15s read timeout
-        headersTimeout: 10_000, // 10s connect timeout
-      }
-    );
+    const response = await pool.request({
+      path: `${upstreamPathPrefix}/verify/single`,
+      method: 'POST',
+      headers,
+      body,
+      bodyTimeout: 15_000, // 15s read timeout
+      headersTimeout: 10_000, // 10s connect timeout
+    });
 
     const duration = Date.now() - startTime;
 
@@ -299,11 +297,6 @@ export async function closePool(): Promise<void> {
   await pool.close();
   logger.info('Upstream API connection pool closed');
 }
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  await closePool();
-});
 
 export default {
   callUpstreamAPI,

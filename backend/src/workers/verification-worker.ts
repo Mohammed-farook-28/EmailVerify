@@ -78,7 +78,7 @@ async function processVerificationJob(job: Job<VerificationJobData>): Promise<Up
     await db.insert(verificationResult).values({
       id: resultId,
       userId,
-      email,
+      email: email.toLowerCase(),
       status: result.status,
       score: result.score,
       deliverability: result.deliverability,

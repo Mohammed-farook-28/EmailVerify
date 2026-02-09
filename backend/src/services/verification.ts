@@ -8,7 +8,7 @@
 import { db } from '../db/index.js';
 import { verificationResult } from '../db/schema.js';
 import { logger, createLogger } from '../config/logger.js';
-import { eq, desc, and, gt, count } from 'drizzle-orm';
+import { eq, desc, and, gt, count, sql } from 'drizzle-orm';
 import type { VerificationResult } from '../db/schema.js';
 
 /**
@@ -97,29 +97,51 @@ export async function getVerificationStats(userId: string) {
   const serviceLogger = createLogger({ userId, operation: 'getVerificationStats' });
 
   try {
-    const results = await db
-      .select()
-      .from(verificationResult)
-      .where(eq(verificationResult.userId, userId));
+    // Use SQL aggregation instead of loading all rows into memory
+    const [statusCounts, deliverCounts, avgResult] = await Promise.all([
+      db
+        .select({
+          status: verificationResult.status,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(verificationResult)
+        .where(eq(verificationResult.userId, userId))
+        .groupBy(verificationResult.status),
+      db
+        .select({
+          deliverability: verificationResult.deliverability,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(verificationResult)
+        .where(eq(verificationResult.userId, userId))
+        .groupBy(verificationResult.deliverability),
+      db
+        .select({
+          avgScore: sql<number>`coalesce(avg(${verificationResult.score}), 0)`,
+          total: sql<number>`count(*)::int`,
+        })
+        .from(verificationResult)
+        .where(eq(verificationResult.userId, userId)),
+    ]);
+
+    const statusMap = Object.fromEntries(statusCounts.map((r) => [r.status, r.count]));
+    const deliverMap = Object.fromEntries(deliverCounts.map((r) => [r.deliverability, r.count]));
 
     const stats = {
-      total: results.length,
+      total: avgResult[0]?.total ?? 0,
       byStatus: {
-        valid: results.filter((r: any) => r.status === 'valid').length,
-        invalid: results.filter((r: any) => r.status === 'invalid').length,
-        risky: results.filter((r: any) => r.status === 'risky').length,
-        unknown: results.filter((r: any) => r.status === 'unknown').length,
+        valid: statusMap['valid'] ?? 0,
+        invalid: statusMap['invalid'] ?? 0,
+        risky: statusMap['risky'] ?? 0,
+        unknown: statusMap['unknown'] ?? 0,
       },
       byDeliverability: {
-        deliverable: results.filter((r: any) => r.deliverability === 'deliverable').length,
-        undeliverable: results.filter((r: any) => r.deliverability === 'undeliverable').length,
-        risky: results.filter((r: any) => r.deliverability === 'risky').length,
-        unknown: results.filter((r: any) => r.deliverability === 'unknown').length,
+        deliverable: deliverMap['deliverable'] ?? 0,
+        undeliverable: deliverMap['undeliverable'] ?? 0,
+        risky: deliverMap['risky'] ?? 0,
+        unknown: deliverMap['unknown'] ?? 0,
       },
-      averageScore:
-        results.length > 0
-          ? results.reduce((sum: number, r: any) => sum + r.score, 0) / results.length
-          : 0,
+      averageScore: avgResult[0]?.avgScore ?? 0,
     };
 
     serviceLogger.info({ stats }, 'Retrieved verification stats');

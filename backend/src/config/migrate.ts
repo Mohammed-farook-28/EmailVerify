@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pool, query } from './database.js';
+import pino from 'pino';
+
+const logger = pino({ name: 'migrate' });
 
 const MIGRATIONS_DIR = path.resolve(import.meta.dirname, '../../migrations');
 
@@ -22,7 +25,7 @@ async function getAppliedMigrations(): Promise<Set<string>> {
 }
 
 async function run(): Promise<void> {
-  console.log('Running migrations...');
+  logger.info('Running migrations...');
 
   await ensureMigrationsTable();
   const applied = await getAppliedMigrations();
@@ -48,18 +51,19 @@ async function run(): Promise<void> {
         [file],
       );
       await client.query('COMMIT');
-      console.log(`  Applied: ${file}`);
+      logger.info({ file }, 'Applied migration');
       count++;
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error(`  Failed: ${file}`);
+      logger.error({ file, err }, 'Failed to apply migration');
       throw err;
     } finally {
       client.release();
     }
   }
 
-  console.log(
+  logger.info(
+    { count },
     count > 0
       ? `Done. Applied ${count} migration(s).`
       : 'No new migrations to apply.',
@@ -68,6 +72,6 @@ async function run(): Promise<void> {
 }
 
 run().catch((err) => {
-  console.error('Migration failed:', err);
+  logger.error({ err }, 'Migration failed');
   process.exit(1);
 });

@@ -4,6 +4,7 @@ import { desc, eq } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import { nanoid } from 'nanoid';
 import { redis } from '../config/redis.js';
+import { logger } from '../config/logger.js';
 
 /**
  * Award signup bonus credits to a new user
@@ -47,17 +48,28 @@ export async function awardSignupBonus(userId: string): Promise<void> {
       createdAt: new Date(),
     });
 
-    console.log(`Awarded ${bonusAmount} signup bonus credits to user ${userId}`);
+    logger.info({ userId, bonusAmount }, 'Awarded signup bonus credits');
   } catch (error) {
-    console.error('Failed to award signup bonus:', error);
+    logger.error({ error, userId }, 'Failed to award signup bonus');
     // Don't throw - signup should succeed even if credit award fails
   }
 }
 
 /**
  * Get user's current credit balance
+ * Checks Redis cache first, falls back to DB on miss
  */
 export async function getBalance(userId: string): Promise<number> {
+  // Check Redis cache first
+  try {
+    const cached = await redis.get(`credit:balance:${userId}`);
+    if (cached !== null) {
+      return parseInt(cached, 10);
+    }
+  } catch {
+    // Redis failure is non-fatal, fall through to DB
+  }
+
   const latestEvent = await db
     .select()
     .from(creditEvent)
@@ -65,11 +77,22 @@ export async function getBalance(userId: string): Promise<number> {
     .orderBy(desc(creditEvent.createdAt))
     .limit(1);
 
-  return latestEvent[0]?.balanceAfter ?? 0;
+  const balance = latestEvent[0]?.balanceAfter ?? 0;
+
+  // Populate cache on DB hit
+  try {
+    await redis.set(`credit:balance:${userId}`, balance.toString());
+  } catch {
+    // Cache population failure is non-fatal
+  }
+
+  return balance;
 }
 
 /**
  * Deduct credits for email verification
+ *
+ * Uses a transaction with row-level locking to prevent race conditions.
  *
  * @param userId - User ID
  * @param amount - Number of credits to deduct (positive number)
@@ -82,27 +105,40 @@ export async function deductCredits(
   amount: number,
   referenceId: string
 ): Promise<number> {
-  const currentBalance = await getBalance(userId);
+  return await db.transaction(async (tx) => {
+    // Lock the latest credit event row for this user to prevent concurrent reads
+    const latestEvent = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.userId, userId))
+      .orderBy(desc(creditEvent.createdAt))
+      .limit(1)
+      .for('update');
 
-  if (currentBalance < amount) {
-    throw new Error('Insufficient credits');
-  }
+    const currentBalance = latestEvent[0]?.balanceAfter ?? 0;
 
-  const newBalance = currentBalance - amount;
+    if (currentBalance < amount) {
+      throw new Error('Insufficient credits');
+    }
 
-  // Create credit event
-  await db.insert(creditEvent).values({
-    id: nanoid(),
-    userId,
-    type: 'verification_used',
-    amount: -amount, // Negative for deduction
-    balanceAfter: newBalance,
-    referenceType: 'verification_job',
-    referenceId,
-    createdAt: new Date(),
+    const newBalance = currentBalance - amount;
+
+    await tx.insert(creditEvent).values({
+      id: nanoid(),
+      userId,
+      type: 'verification_used',
+      amount: -amount,
+      balanceAfter: newBalance,
+      referenceType: 'verification_job',
+      referenceId,
+      createdAt: new Date(),
+    });
+
+    // Update Redis cache
+    await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    return newBalance;
   });
-
-  return newBalance;
 }
 
 /**
@@ -118,25 +154,34 @@ export async function refundCredits(
   amount: number,
   referenceId: string
 ): Promise<number> {
-  const currentBalance = await getBalance(userId);
-  const newBalance = currentBalance + amount;
+  return await db.transaction(async (tx) => {
+    const latestEvent = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.userId, userId))
+      .orderBy(desc(creditEvent.createdAt))
+      .limit(1)
+      .for('update');
 
-  // Create credit event for refund
-  await db.insert(creditEvent).values({
-    id: nanoid(),
-    userId,
-    type: 'verification_refund',
-    amount: amount, // Positive for refund
-    balanceAfter: newBalance,
-    referenceType: 'verification_failed',
-    referenceId,
-    createdAt: new Date(),
+    const currentBalance = latestEvent[0]?.balanceAfter ?? 0;
+    const newBalance = currentBalance + amount;
+
+    await tx.insert(creditEvent).values({
+      id: nanoid(),
+      userId,
+      type: 'verification_refund',
+      amount: amount,
+      balanceAfter: newBalance,
+      referenceType: 'verification_failed',
+      referenceId,
+      createdAt: new Date(),
+    });
+
+    // Update Redis cache
+    await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    return newBalance;
   });
-
-  // Update Redis cache immediately so user sees refund right away
-  await redis.set(`credit:balance:${userId}`, newBalance.toString());
-
-  return newBalance;
 }
 
 /**
@@ -144,51 +189,59 @@ export async function refundCredits(
  *
  * @param userId - User ID
  * @param amount - Number of credits to add (positive number)
- * @param packageId - Package identifier (e.g., "1K", "5K", "10K")
  * @param checkoutSessionId - Stripe checkout session ID
+ * @param packageLabel - Optional label for the purchase (e.g., "5000 credits")
  * @returns New balance after addition
  */
 export async function addPurchaseCredits(
   userId: string,
   amount: number,
-  packageId: string,
-  checkoutSessionId: string
+  checkoutSessionId: string,
+  packageLabel?: string
 ): Promise<number> {
-  const idempotencyKey = `purchase:${checkoutSessionId}`;
+  return await db.transaction(async (tx) => {
+    const idempotencyKey = `purchase:${checkoutSessionId}`;
 
-  // Check if already processed (idempotency)
-  const existing = await db
-    .select()
-    .from(creditEvent)
-    .where(eq(creditEvent.idempotencyKey, idempotencyKey))
-    .limit(1);
+    // Check if already processed (idempotency)
+    const existing = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.idempotencyKey, idempotencyKey))
+      .limit(1);
 
-  if (existing.length > 0) {
-    // Already processed, return current balance
-    return existing[0].balanceAfter;
-  }
+    if (existing.length > 0) {
+      return existing[0].balanceAfter;
+    }
 
-  const currentBalance = await getBalance(userId);
-  const newBalance = currentBalance + amount;
+    const latestEvent = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.userId, userId))
+      .orderBy(desc(creditEvent.createdAt))
+      .limit(1)
+      .for('update');
 
-  // Create credit event
-  await db.insert(creditEvent).values({
-    id: nanoid(),
-    userId,
-    type: 'purchase',
-    amount: amount,
-    balanceAfter: newBalance,
-    referenceType: 'checkout_session',
-    referenceId: checkoutSessionId,
-    idempotencyKey,
-    metadata: { packageId },
-    createdAt: new Date(),
+    const currentBalance = latestEvent[0]?.balanceAfter ?? 0;
+    const newBalance = currentBalance + amount;
+
+    await tx.insert(creditEvent).values({
+      id: nanoid(),
+      userId,
+      type: 'purchase',
+      amount: amount,
+      balanceAfter: newBalance,
+      referenceType: 'checkout_session',
+      referenceId: checkoutSessionId,
+      idempotencyKey,
+      metadata: { packageLabel: packageLabel || `${amount} credits` },
+      createdAt: new Date(),
+    });
+
+    // Update Redis cache
+    await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    return newBalance;
   });
-
-  // Update Redis cache
-  await redis.set(`credit:balance:${userId}`, newBalance.toString());
-
-  return newBalance;
 }
 
 /**
@@ -208,42 +261,49 @@ export async function addSubscriptionCredits(
   subscriptionId: string,
   periodEnd: Date
 ): Promise<number> {
-  // Idempotency key includes period end to allow multiple renewals
-  const idempotencyKey = `subscription:${subscriptionId}:${periodEnd.getTime()}`;
+  return await db.transaction(async (tx) => {
+    const idempotencyKey = `subscription:${subscriptionId}:${periodEnd.getTime()}`;
 
-  // Check if already processed (idempotency)
-  const existing = await db
-    .select()
-    .from(creditEvent)
-    .where(eq(creditEvent.idempotencyKey, idempotencyKey))
-    .limit(1);
+    // Check if already processed (idempotency)
+    const existing = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.idempotencyKey, idempotencyKey))
+      .limit(1);
 
-  if (existing.length > 0) {
-    // Already processed, return current balance
-    return existing[0].balanceAfter;
-  }
+    if (existing.length > 0) {
+      return existing[0].balanceAfter;
+    }
 
-  const currentBalance = await getBalance(userId);
-  const newBalance = currentBalance + amount;
+    const latestEvent = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.userId, userId))
+      .orderBy(desc(creditEvent.createdAt))
+      .limit(1)
+      .for('update');
 
-  // Create credit event
-  await db.insert(creditEvent).values({
-    id: nanoid(),
-    userId,
-    type: 'subscription',
-    amount: amount,
-    balanceAfter: newBalance,
-    referenceType: 'subscription',
-    referenceId: subscriptionId,
-    idempotencyKey,
-    metadata: { planId, expiresAt: periodEnd.toISOString() },
-    createdAt: new Date(),
+    const currentBalance = latestEvent[0]?.balanceAfter ?? 0;
+    const newBalance = currentBalance + amount;
+
+    await tx.insert(creditEvent).values({
+      id: nanoid(),
+      userId,
+      type: 'subscription',
+      amount: amount,
+      balanceAfter: newBalance,
+      referenceType: 'subscription',
+      referenceId: subscriptionId,
+      idempotencyKey,
+      metadata: { planId, expiresAt: periodEnd.toISOString() },
+      createdAt: new Date(),
+    });
+
+    // Update Redis cache
+    await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    return newBalance;
   });
-
-  // Update Redis cache
-  await redis.set(`credit:balance:${userId}`, newBalance.toString());
-
-  return newBalance;
 }
 
 /**
@@ -261,39 +321,47 @@ export async function expireSubscriptionCredits(
   subscriptionId: string,
   periodEnd: Date
 ): Promise<number> {
-  const idempotencyKey = `expire:${subscriptionId}:${periodEnd.getTime()}`;
+  return await db.transaction(async (tx) => {
+    const idempotencyKey = `expire:${subscriptionId}:${periodEnd.getTime()}`;
 
-  // Check if already processed (idempotency)
-  const existing = await db
-    .select()
-    .from(creditEvent)
-    .where(eq(creditEvent.idempotencyKey, idempotencyKey))
-    .limit(1);
+    // Check if already processed (idempotency)
+    const existing = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.idempotencyKey, idempotencyKey))
+      .limit(1);
 
-  if (existing.length > 0) {
-    // Already processed, return current balance
-    return existing[0].balanceAfter;
-  }
+    if (existing.length > 0) {
+      return existing[0].balanceAfter;
+    }
 
-  const currentBalance = await getBalance(userId);
-  const newBalance = Math.max(0, currentBalance - amount); // Don't go negative
+    const latestEvent = await tx
+      .select()
+      .from(creditEvent)
+      .where(eq(creditEvent.userId, userId))
+      .orderBy(desc(creditEvent.createdAt))
+      .limit(1)
+      .for('update');
 
-  // Create credit event
-  await db.insert(creditEvent).values({
-    id: nanoid(),
-    userId,
-    type: 'expire',
-    amount: -amount, // Negative for expiration
-    balanceAfter: newBalance,
-    referenceType: 'subscription',
-    referenceId: subscriptionId,
-    idempotencyKey,
-    metadata: { periodEnd: periodEnd.toISOString() },
-    createdAt: new Date(),
+    const currentBalance = latestEvent[0]?.balanceAfter ?? 0;
+    const newBalance = Math.max(0, currentBalance - amount);
+
+    await tx.insert(creditEvent).values({
+      id: nanoid(),
+      userId,
+      type: 'expire',
+      amount: -amount,
+      balanceAfter: newBalance,
+      referenceType: 'subscription',
+      referenceId: subscriptionId,
+      idempotencyKey,
+      metadata: { periodEnd: periodEnd.toISOString() },
+      createdAt: new Date(),
+    });
+
+    // Update Redis cache
+    await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    return newBalance;
   });
-
-  // Update Redis cache
-  await redis.set(`credit:balance:${userId}`, newBalance.toString());
-
-  return newBalance;
 }

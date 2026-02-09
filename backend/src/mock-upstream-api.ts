@@ -10,6 +10,9 @@
 
 import express from 'express';
 import type { Request, Response } from 'express';
+import pino from 'pino';
+
+const logger = pino({ name: 'mock-upstream' });
 
 const app = express();
 app.use(express.json());
@@ -154,7 +157,7 @@ app.post('/verify/single', (req: Request<{}, {}, VerificationRequest>, res: Resp
 
   // Simulate 5% failure rate for circuit breaker testing
   if (Math.random() < 0.05) {
-    console.error(`[Mock API] Simulated failure for email: ${email}`);
+    logger.warn({ email }, 'Simulated failure');
     return res.status(500).json({
       error: 'Internal server error',
       message: 'Simulated upstream API failure',
@@ -167,10 +170,7 @@ app.post('/verify/single', (req: Request<{}, {}, VerificationRequest>, res: Resp
   setTimeout(() => {
     const result = generateMockResult(email);
 
-    console.log(`[Mock API] Verified: ${email} -> ${result.status} (score: ${result.score})`);
-    if (idempotencyKey) {
-      console.log(`[Mock API] Idempotency key: ${idempotencyKey}`);
-    }
+    logger.info({ email, status: result.status, score: result.score, idempotencyKey }, 'Verified');
 
     res.json(result);
   }, delay);
@@ -187,13 +187,9 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n✅ Mock Upstream API running on http://localhost:${PORT}`);
-  console.log(`📧 POST /verify/single - Verify email address`);
-  console.log(`💚 GET /health - Health check\n`);
-  console.log(`Test patterns:`);
-  console.log(`  - test@gmail.com -> valid (score: 0.95)`);
-  console.log(`  - invalid@test.com -> invalid (score: 0.1)`);
-  console.log(`  - risky@temp.com -> risky (score: 0.5)`);
-  console.log(`  - unknown@example.com -> unknown (score: 0.3)`);
-  console.log(`\n🔄 Simulates 5% random failure rate for testing\n`);
+  logger.info({ port: PORT }, 'Mock Upstream API running');
+  logger.info('POST /verify/single - Verify email address');
+  logger.info('GET /health - Health check');
+  logger.info('Test: test@gmail.com -> valid, invalid@test.com -> invalid, risky@temp.com -> risky, unknown@example.com -> unknown');
+  logger.info('Simulates 5% random failure rate for testing');
 });

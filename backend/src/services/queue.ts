@@ -160,23 +160,21 @@ export async function enqueueBulkVerification(
   userId: string,
   bulkJobId: string
 ): Promise<string[]> {
-  const jobs = await Promise.all(
-    emails.map((email, index) =>
-      verificationQueue.add(
-        'verify-bulk' as any,
-        {
-          email,
-          userId,
-          jobType: 'bulk',
-          bulkJobId,
-        },
-        {
-          priority: 5, // Normal priority
-          jobId: `bulk-${bulkJobId}-${index}`,
-        }
-      )
-    )
-  );
+  const bulkJobs = emails.map((email, index) => ({
+    name: 'verify-bulk' as any,
+    data: {
+      email,
+      userId,
+      jobType: 'bulk' as const,
+      bulkJobId,
+    },
+    opts: {
+      priority: 5,
+      jobId: `bulk-${bulkJobId}-${index}`,
+    },
+  }));
+
+  const jobs = await verificationQueue.addBulk(bulkJobs);
 
   logger.info(
     {
@@ -237,10 +235,5 @@ export async function closeQueue() {
   await connection.quit();
   logger.info('Queue connections closed');
 }
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  await closeQueue();
-});
 
 export default verificationQueue;

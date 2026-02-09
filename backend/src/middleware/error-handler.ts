@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AppError, RateLimitError, ValidationError, ForbiddenError } from '../lib/errors.js';
+import { logger } from '../config/logger.js';
 
 export function errorHandler(
   err: Error,
@@ -36,6 +37,6 @@ export function errorHandler(
     return;
   }
 
-  console.error('Unhandled error:', err);
+  logger.error({ err }, 'Unhandled error');
   res.status(500).json({ error: 'Internal server error' });
 }

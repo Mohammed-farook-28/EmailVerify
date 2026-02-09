@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { redis } from '../config/redis.js';
 import { RateLimitError } from '../lib/errors.js';
+import { logger } from '../config/logger.js';
 
 interface RateLimitConfig {
   keyPrefix: string;
@@ -118,35 +119,75 @@ const GLOBAL_RATE_LIMIT = 2000;
  * API rate limit middleware with tier-based limits
  * Sets X-RateLimit-* headers on all responses
  */
+// Lua script: atomic global check + per-user check + both increments in 1 round-trip
+// Uses redis.eval (ioredis method for Redis EVAL command) — NOT JavaScript eval()
+const RATE_LIMIT_LUA = `
+local globalKey = KEYS[1]
+local userKey = KEYS[2]
+local windowStart = tonumber(ARGV[1])
+local now = ARGV[2]
+local member = ARGV[3]
+local globalMember = ARGV[4]
+local globalLimit = tonumber(ARGV[5])
+local userLimit = tonumber(ARGV[6])
+
+redis.call('ZREMRANGEBYSCORE', globalKey, 0, windowStart)
+redis.call('ZREMRANGEBYSCORE', userKey, 0, windowStart)
+
+local globalCount = redis.call('ZCARD', globalKey)
+if globalCount >= globalLimit then
+  return {-1, globalCount}
+end
+
+redis.call('ZADD', userKey, now, member)
+redis.call('EXPIRE', userKey, 2)
+local userCount = redis.call('ZCARD', userKey)
+
+if userCount > userLimit then
+  return {-2, userCount}
+end
+
+redis.call('ZADD', globalKey, now, globalMember)
+redis.call('EXPIRE', globalKey, 2)
+
+return {0, userCount}
+`;
+
 export function apiRateLimit() {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // Get user tier from API key auth middleware
     const userId = req.apiKeyUserId;
     const tier = req.apiKeyUserTier || 'starter';
 
     if (!userId) {
-      // No authenticated user - skip rate limiting (will fail auth anyway)
       return next();
     }
 
     const limits = API_TIER_LIMITS[tier] || API_TIER_LIMITS.starter;
-    const key = `ratelimit:api:${userId}`;
+    const globalKey = 'ratelimit:api:global';
+    const userKey = `ratelimit:api:${userId}`;
     const now = Date.now();
-    const windowMs = 1000; // 1 second window
-    const windowStart = now - windowMs;
+    const windowStart = now - 1000;
 
     try {
-      // Check global rate limit first
-      const globalKey = 'ratelimit:api:global';
-      const globalPipeline = redis.pipeline();
-      globalPipeline.zremrangebyscore(globalKey, 0, windowStart);
-      globalPipeline.zcard(globalKey);
-      const globalResults = await globalPipeline.exec();
-      const globalCount = (globalResults?.[1]?.[1] as number) ?? 0;
+      // Single Redis round-trip via Lua script (ioredis EVAL command)
+      const result = await (redis as any).eval(
+        RATE_LIMIT_LUA,
+        2,
+        globalKey,
+        userKey,
+        windowStart.toString(),
+        now.toString(),
+        `${now}:${Math.random()}`,
+        `${now}:${userId}:${Math.random()}`,
+        GLOBAL_RATE_LIMIT.toString(),
+        limits.requestsPerSecond.toString()
+      ) as [number, number];
 
-      if (globalCount >= GLOBAL_RATE_LIMIT) {
-        const retryAfter = 1;
-        setRateLimitHeaders(res, GLOBAL_RATE_LIMIT, 0, now + 1000);
+      const [status, count] = result;
+      const resetTime = now + 1000;
+
+      if (status === -1) {
+        setRateLimitHeaders(res, GLOBAL_RATE_LIMIT, 0, resetTime);
         res.status(429).json({
           error: {
             code: 'GLOBAL_RATE_LIMIT_EXCEEDED',
@@ -157,43 +198,26 @@ export function apiRateLimit() {
         return;
       }
 
-      // Check per-user rate limit
-      const pipeline = redis.pipeline();
-      pipeline.zremrangebyscore(key, 0, windowStart);
-      pipeline.zadd(key, now.toString(), `${now}:${Math.random()}`);
-      pipeline.zcard(key);
-      pipeline.expire(key, 2); // Expire after 2 seconds
-      const results = await pipeline.exec();
-
-      const count = (results?.[2]?.[1] as number) ?? 0;
-      const remaining = Math.max(0, limits.requestsPerSecond - count);
-      const resetTime = now + windowMs;
-
-      // Set rate limit headers on all responses
-      setRateLimitHeaders(res, limits.requestsPerSecond, remaining, resetTime);
-
-      if (count > limits.requestsPerSecond) {
-        const retryAfter = Math.ceil((resetTime - now) / 1000);
-        res.setHeader('Retry-After', retryAfter.toString());
+      if (status === -2) {
+        setRateLimitHeaders(res, limits.requestsPerSecond, 0, resetTime);
+        res.setHeader('Retry-After', '1');
         res.status(429).json({
           error: {
             code: 'RATE_LIMIT_EXCEEDED',
             message: `Rate limit exceeded. You can make ${limits.requestsPerSecond} requests per second.`,
-            retryAfter,
+            retryAfter: 1,
           },
           requestId: req.requestId,
         });
         return;
       }
 
-      // Increment global counter
-      await redis.zadd(globalKey, now.toString(), `${now}:${userId}:${Math.random()}`);
-      await redis.expire(globalKey, 2);
-
+      const remaining = Math.max(0, limits.requestsPerSecond - count);
+      setRateLimitHeaders(res, limits.requestsPerSecond, remaining, resetTime);
       next();
     } catch (err) {
       // On Redis error, fail open but log
-      console.error('Rate limit Redis error:', err);
+      logger.error({ err }, 'Rate limit Redis error');
       next();
     }
   };

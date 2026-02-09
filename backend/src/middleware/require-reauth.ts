@@ -3,6 +3,7 @@ import { ForbiddenError } from '../lib/errors.js';
 import { db } from '../db/index.js';
 import { session as sessionTable } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
+import { logger } from '../config/logger.js';
 
 const REAUTH_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -51,7 +52,7 @@ export async function requireReauth(
 
     next();
   } catch (error) {
-    console.error('Re-auth check error:', error);
+    logger.error({ error }, 'Re-auth check error');
     next(new ForbiddenError('Re-authentication check failed'));
   }
 }

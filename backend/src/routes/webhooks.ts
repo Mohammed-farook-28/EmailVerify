@@ -124,15 +124,15 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session):
 
   if (localSession.type === 'one_time_purchase' && session.payment_status === 'paid') {
     // Add credits immediately for one-time purchase
-    const metadata = localSession.metadata as { packageId: string; credits: number };
+    const metadata = localSession.metadata as { credits: number; price?: number };
     await addPurchaseCredits(
       localSession.userId,
       metadata.credits,
-      metadata.packageId,
-      session.id
+      session.id,
+      `${metadata.credits} credits`
     );
     logger.info(
-      { userId: localSession.userId, credits: metadata.credits, packageId: metadata.packageId },
+      { userId: localSession.userId, credits: metadata.credits },
       'One-time purchase credits added'
     );
   } else if (localSession.type === 'subscription') {
@@ -253,7 +253,10 @@ async function handleSubscriptionUpdated(subscription: Stripe.Subscription): Pro
   }
 
   // Extract plan ID from metadata or price
-  const planId = subscription.metadata.planId || 'unknown';
+  const planId = subscription.metadata?.planId || 'unknown';
+  if (planId === 'unknown') {
+    logger.warn({ subscriptionId: subscription.id }, 'Subscription missing planId in metadata');
+  }
   const priceId = subscription.items.data[0].price.id;
 
   // Upsert subscription record

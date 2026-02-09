@@ -171,17 +171,22 @@ export async function getTransactionHistory(
  */
 export async function exportTransactionsCSV(userId: string, startDate?: Date): Promise<string> {
   try {
-    // Get all transactions (no limit for export)
-    const conditions = [eq(creditEvent.userId, userId)];
-    if (startDate) {
-      conditions.push(gte(creditEvent.createdAt, startDate));
-    }
+    // Default date range: last 365 days if no startDate provided
+    const effectiveStartDate = startDate || new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const conditions = [
+      eq(creditEvent.userId, userId),
+      gte(creditEvent.createdAt, effectiveStartDate),
+    ];
+
+    // Hard limit: max 50,000 rows to prevent OOM
+    const MAX_EXPORT_ROWS = 50_000;
 
     const events = await db
       .select()
       .from(creditEvent)
       .where(and(...conditions))
-      .orderBy(desc(creditEvent.createdAt));
+      .orderBy(desc(creditEvent.createdAt))
+      .limit(MAX_EXPORT_ROWS);
 
     // Generate CSV header
     const header = 'ID,Type,Amount,Balance After,Reference Type,Reference ID,Created At\n';

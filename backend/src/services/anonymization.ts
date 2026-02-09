@@ -1,5 +1,6 @@
 import * as UserModel from '../models/user.js';
 import * as SessionModel from '../models/session.js';
+import { logger } from '../config/logger.js';
 
 const GRACE_PERIOD_DAYS = 30;
 
@@ -16,10 +17,8 @@ export async function anonymizePendingDeletions(): Promise<void> {
     // TODO: Delete API keys, webhooks, bulk job files (Epic 2-6)
     // These will be implemented in later epics
 
-    console.log(`Anonymized user ${user.id} (was ${user.email})`);
+    logger.info({ userId: user.id }, 'Anonymized user');
   }
 
-  console.log(
-    `Anonymization cron completed: ${users.length} accounts anonymized`,
-  );
+  logger.info({ count: users.length }, 'Anonymization cron completed');
 }

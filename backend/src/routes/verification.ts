@@ -232,7 +232,10 @@ router.get('/quick-verify/stream', sseMiddleware, async (req: Request, res: Resp
         return res.end();
       }
     } catch (error: any) {
+      clearInterval(pollInterval);
       logger.error({ error: error.message, email, userId }, 'Error polling for result');
+      sendSSEEvent(res, 'error', { error: 'Internal error while polling' });
+      res.end();
     }
   }, 1000);
 

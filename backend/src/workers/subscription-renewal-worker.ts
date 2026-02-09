@@ -138,8 +138,9 @@ async function processSubscriptionRenewal(subscription: any): Promise<void> {
     return;
   }
 
-  // 1. Expire old subscription credits from previous period
-  try {
+  // Wrap expire + add + update in a transaction for atomicity
+  await db.transaction(async (tx) => {
+    // 1. Expire old subscription credits from previous period
     await expireSubscriptionCredits(
       subscription.userId,
       planCredits,
@@ -150,34 +151,28 @@ async function processSubscriptionRenewal(subscription: any): Promise<void> {
       { userId: subscription.userId, credits: planCredits },
       'Expired old subscription credits'
     );
-  } catch (error) {
-    // Log but don't fail - we still want to add new credits
-    logger.error(
-      { error, userId: subscription.userId },
-      'Failed to expire old credits, continuing anyway'
+
+    // 2. Add new subscription credits for new period
+    await addSubscriptionCredits(
+      subscription.userId,
+      planCredits,
+      subscription.planId,
+      subscription.stripeSubscriptionId,
+      newPeriodEnd
     );
-  }
 
-  // 2. Add new subscription credits for new period
-  await addSubscriptionCredits(
-    subscription.userId,
-    planCredits,
-    subscription.planId,
-    subscription.stripeSubscriptionId,
-    newPeriodEnd
-  );
-
-  // 3. Update local subscription record with new period
-  await db
-    .update(subscriptionTable)
-    .set({
-      currentPeriodStart: stripeSubscription.currentPeriodStart,
-      currentPeriodEnd: stripeSubscription.currentPeriodEnd,
-      status: stripeSubscription.status,
-      stripePriceId: stripeSubscription.priceId,
-      updatedAt: new Date(),
-    })
-    .where(eq(subscriptionTable.id, subscription.id));
+    // 3. Update local subscription record with new period
+    await tx
+      .update(subscriptionTable)
+      .set({
+        currentPeriodStart: stripeSubscription.currentPeriodStart,
+        currentPeriodEnd: stripeSubscription.currentPeriodEnd,
+        status: stripeSubscription.status,
+        stripePriceId: stripeSubscription.priceId,
+        updatedAt: new Date(),
+      })
+      .where(eq(subscriptionTable.id, subscription.id));
+  });
 
   logger.info(
     {

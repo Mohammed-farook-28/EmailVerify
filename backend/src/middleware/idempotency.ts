@@ -131,8 +131,8 @@ export function idempotencyMiddleware(req: Request, res: Response, next: NextFun
       // Override res.json to capture the response
       const originalJson = res.json.bind(res);
       res.json = function (body: unknown) {
-        // Only cache successful responses (2xx)
-        if (res.statusCode >= 200 && res.statusCode < 300) {
+        // Cache 2xx and 4xx responses (client errors are deterministic), skip 5xx (transient)
+        if (res.statusCode >= 200 && res.statusCode < 500) {
           const responseToCache: CachedResponse = {
             statusCode: res.statusCode,
             headers: {

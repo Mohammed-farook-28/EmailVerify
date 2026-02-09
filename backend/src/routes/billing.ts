@@ -289,13 +289,22 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const userId = req.user!.id;
-      const limit = parseInt(req.query.limit as string) || 10;
-      const offset = parseInt(req.query.offset as string) || 0;
+      const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
+      const offset = Math.min(Math.max(parseInt(req.query.offset as string) || 0, 0), 10000);
 
-      // Default to last 90 days for live queries
-      const startDate = req.query.startDate
-        ? new Date(req.query.startDate as string)
-        : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      // Validate startDate if provided
+      const rawStartDate = req.query.startDate as string | undefined;
+      let startDate: Date;
+      if (rawStartDate) {
+        const parsed = new Date(rawStartDate);
+        if (isNaN(parsed.getTime())) {
+          return res.status(400).json({ error: 'Invalid startDate format' });
+        }
+        startDate = parsed;
+      } else {
+        // Default to last 90 days for live queries
+        startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      }
 
       const result = await getTransactionHistory(userId, limit, offset, startDate);
 
@@ -318,8 +327,15 @@ router.get(
     try {
       const userId = req.user!.id;
 
-      // Optional start date filter
-      const startDate = req.query.startDate ? new Date(req.query.startDate as string) : undefined;
+      // Optional start date filter with validation
+      let startDate: Date | undefined;
+      if (req.query.startDate) {
+        const parsed = new Date(req.query.startDate as string);
+        if (isNaN(parsed.getTime())) {
+          return res.status(400).json({ error: 'Invalid startDate format' });
+        }
+        startDate = parsed;
+      }
 
       const csv = await exportTransactionsCSV(userId, startDate);
 
