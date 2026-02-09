@@ -85,6 +85,7 @@ router.get('/stats', async (req: Request, res: Response) => {
 router.get('/metrics/distribution', async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const range = parseInt(req.query.range as string, 10) || 30;
+  const method = req.query.method as string | undefined;
 
   // Validate range
   const validRanges = [7, 30, 90];
@@ -99,7 +100,7 @@ router.get('/metrics/distribution', async (req: Request, res: Response) => {
   try {
     requestLogger.info('Processing status distribution request');
 
-    const distribution = await getStatusDistribution(userId, rangeDays);
+    const distribution = await getStatusDistribution(userId, rangeDays, method);
 
     requestLogger.info('Status distribution retrieved successfully');
 
@@ -180,12 +181,13 @@ router.get('/metrics/trend', async (req: Request, res: Response) => {
 router.get('/metrics/usage-by-status', async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const range = parseInt(req.query.range as string, 10) || 7;
+  const method = req.query.method as string | undefined;
 
   const validRanges = [7, 30, 90];
   const rangeDays = validRanges.includes(range) ? range : 7;
 
   try {
-    const data = await getUsageByStatus(userId, rangeDays);
+    const data = await getUsageByStatus(userId, rangeDays, method);
 
     return res.json({
       success: true,

@@ -27,9 +27,8 @@ export class StripeClient implements PaymentProvider {
 
   async createOneTimeCheckout(
     customerId: string,
-    packageId: string,
-    priceId: string,
-    quantity: number = 1
+    credits: number,
+    amountCents: number
   ): Promise<{ sessionId: string; url: string }> {
     try {
       const session = await stripe.checkout.sessions.create({
@@ -38,8 +37,15 @@ export class StripeClient implements PaymentProvider {
         payment_method_types: ['card'],
         line_items: [
           {
-            price: priceId,
-            quantity,
+            price_data: {
+              currency: stripeConfig.currency,
+              product_data: {
+                name: `${credits.toLocaleString()} Email Verification Credits`,
+                description: `One-time purchase of ${credits.toLocaleString()} email verification credits for EmailKit.`,
+              },
+              unit_amount: amountCents,
+            },
+            quantity: 1,
           },
         ],
         success_url: stripeConfig.getSuccessUrl('{CHECKOUT_SESSION_ID}'),
@@ -47,12 +53,12 @@ export class StripeClient implements PaymentProvider {
         expires_at: Math.floor(Date.now() / 1000) + stripeConfig.checkoutSessionExpiration,
         metadata: {
           type: 'one_time_purchase',
-          packageId,
+          credits: String(credits),
         },
       });
 
       logger.info(
-        { sessionId: session.id, customerId, packageId, priceId },
+        { sessionId: session.id, customerId, credits, amountCents },
         'One-time checkout session created'
       );
 
@@ -61,7 +67,7 @@ export class StripeClient implements PaymentProvider {
         url: session.url!,
       };
     } catch (error) {
-      logger.error({ error, customerId, packageId }, 'Failed to create one-time checkout session');
+      logger.error({ error, customerId, credits }, 'Failed to create one-time checkout session');
       throw new Error('Failed to create checkout session');
     }
   }

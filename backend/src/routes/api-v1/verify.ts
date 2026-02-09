@@ -10,7 +10,7 @@ import {
 import { getBalance, deductCredits } from '../../services/credit.js';
 import { callUpstreamAPI, type VerificationResult } from '../../services/upstream-client.js';
 import { db } from '../../db/index.js';
-import { bulkJob, bulkVerificationResult } from '../../db/schema.js';
+import { bulkJob, bulkVerificationResult, verificationResult } from '../../db/schema.js';
 import { eq, and, or, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { bulkVerificationQueue } from '../../services/bulk-verification.js';
@@ -85,6 +85,19 @@ router.post(
 
       // Deduct credits
       await deductCredits(userId, 1, req.requestId);
+
+      // Store result in DB for usage history tracking
+      const resultId = nanoid();
+      await db.insert(verificationResult).values({
+        id: resultId,
+        userId,
+        email,
+        status: result.status,
+        score: result.score,
+        deliverability: result.deliverability,
+        attributes: result.attributes,
+        serverInfo: { ...result.serverInfo, method: 'api', apiKeyId: req.apiKeyId },
+      });
 
       res.json({
         email: result.email,

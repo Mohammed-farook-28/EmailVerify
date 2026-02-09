@@ -10,19 +10,45 @@ import { getBillingInfo, getTransactionHistory, exportTransactionsCSV } from '..
 
 const router = Router();
 
-// Package configuration (1K to 1M credits)
-// Prices must match Stripe product configuration
-const PACKAGES = {
-  '1K': { credits: 1000, price: 10, priceId: process.env.STRIPE_PRICE_1K },
-  '2K': { credits: 2000, price: 18, priceId: process.env.STRIPE_PRICE_2K },
-  '5K': { credits: 5000, price: 40, priceId: process.env.STRIPE_PRICE_5K },
-  '10K': { credits: 10000, price: 75, priceId: process.env.STRIPE_PRICE_10K },
-  '25K': { credits: 25000, price: 175, priceId: process.env.STRIPE_PRICE_25K },
-  '50K': { credits: 50000, price: 325, priceId: process.env.STRIPE_PRICE_50K },
-  '100K': { credits: 100000, price: 600, priceId: process.env.STRIPE_PRICE_100K },
-  '500K': { credits: 500000, price: 2750, priceId: process.env.STRIPE_PRICE_500K },
-  '1M': { credits: 1000000, price: 5000, priceId: process.env.STRIPE_PRICE_1M },
-} as const;
+// Dynamic pricing tiers for one-time purchases
+// Linear interpolation between these anchor points
+const PRICE_TIERS: [number, number][] = [
+  [1_000, 10],
+  [2_000, 18],
+  [5_000, 40],
+  [10_000, 75],
+  [25_000, 175],
+  [50_000, 325],
+  [100_000, 600],
+];
+
+// Valid credit stops matching the frontend slider
+const VALID_CREDIT_STOPS = new Set([
+  1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000,
+  15_000, 20_000, 25_000, 30_000, 35_000, 40_000, 45_000, 50_000,
+  60_000, 70_000, 80_000, 90_000, 100_000,
+]);
+
+/**
+ * Calculate price for a credit amount using linear interpolation
+ */
+function calculatePrice(credits: number): number {
+  if (credits <= PRICE_TIERS[0][0]) return PRICE_TIERS[0][1];
+  if (credits >= PRICE_TIERS[PRICE_TIERS.length - 1][0]) return PRICE_TIERS[PRICE_TIERS.length - 1][1];
+
+  for (let i = 0; i < PRICE_TIERS.length - 1; i++) {
+    const [lowCredits, lowPrice] = PRICE_TIERS[i];
+    const [highCredits, highPrice] = PRICE_TIERS[i + 1];
+
+    if (credits >= lowCredits && credits <= highCredits) {
+      const ratio = (credits - lowCredits) / (highCredits - lowCredits);
+      const price = lowPrice + ratio * (highPrice - lowPrice);
+      return Math.round(price * 100) / 100;
+    }
+  }
+
+  return PRICE_TIERS[PRICE_TIERS.length - 1][1];
+}
 
 // Subscription plan configuration (10 plans: 5 tiers x 2 billing cycles)
 // Prices must match Stripe product configuration
@@ -42,46 +68,48 @@ const PLANS = {
 /**
  * POST /api/billing/checkout/one-time
  * Create a checkout session for one-time credit purchase
+ *
+ * Body: { credits: number }
+ * Credits must be one of the valid slider stops (1K-100K)
  */
 router.post(
   '/checkout/one-time',
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { packageId } = req.body;
+      const { credits } = req.body;
       const userId = req.user!.id;
 
-      if (!packageId || !(packageId in PACKAGES)) {
-        return res.status(400).json({ error: 'Invalid package ID' });
+      // Validate credits is a valid stop
+      if (!credits || typeof credits !== 'number' || !VALID_CREDIT_STOPS.has(credits)) {
+        return res.status(400).json({
+          error: 'Invalid credit amount',
+          message: `Credits must be one of: ${Array.from(VALID_CREDIT_STOPS).join(', ')}`,
+        });
       }
 
-      const pkg = PACKAGES[packageId as keyof typeof PACKAGES];
-      if (!pkg.priceId) {
-        logger.error({ packageId }, 'Price ID not configured for package');
-        return res.status(500).json({ error: 'Package not configured' });
-      }
+      // Calculate price server-side (authoritative)
+      const price = calculatePrice(credits);
+      const amountCents = Math.round(price * 100);
 
       // Get or create Stripe customer
       const [existingUser] = await db.select().from(user).where(eq(user.id, userId)).limit(1);
 
       let customerId = existingUser.paymentCustomerId;
       if (!customerId) {
-        // Create Stripe customer
         customerId = await stripeClient.createCustomer(
           userId,
           existingUser.email,
           existingUser.name
         );
-
-        // Save customer ID
         await db.update(user).set({ paymentCustomerId: customerId }).where(eq(user.id, userId));
       }
 
-      // Create checkout session
+      // Create checkout session with dynamic price_data
       const { sessionId, url } = await stripeClient.createOneTimeCheckout(
         customerId,
-        packageId,
-        pkg.priceId
+        credits,
+        amountCents
       );
 
       // Save checkout session for tracking
@@ -91,11 +119,11 @@ router.post(
         type: 'one_time_purchase',
         status: 'open',
         paymentStatus: 'unpaid',
-        metadata: { packageId, credits: pkg.credits },
+        metadata: { credits, price },
         createdAt: new Date(),
       });
 
-      logger.info({ userId, packageId, sessionId }, 'One-time checkout session created');
+      logger.info({ userId, credits, price, sessionId }, 'One-time checkout session created');
 
       res.json({ sessionId, url });
     } catch (error) {
@@ -221,12 +249,13 @@ router.get(
           .where(eq(checkoutSession.id, sessionId));
       }
 
+      const meta = session.metadata as Record<string, unknown>;
       res.json({
         status: status.status,
         paymentStatus: status.paymentStatus,
         type: session.type,
-        packageId: (session.metadata as Record<string, string>)?.packageId,
-        planId: (session.metadata as Record<string, string>)?.planId,
+        credits: meta?.credits,
+        planId: meta?.planId,
       });
     } catch (error) {
       logger.error({ error, sessionId: req.params.sessionId }, 'Failed to get checkout status');
@@ -504,16 +533,14 @@ router.post(
 
 /**
  * GET /api/billing/packages (public)
- * Get all available credit packages
+ * Returns the pricing tiers and valid credit stops for the slider
  */
 router.get('/packages', async (req: Request, res: Response) => {
-  const packages = Object.entries(PACKAGES).map(([id, pkg]) => ({
-    id,
-    credits: pkg.credits,
-    price: pkg.price,
-    popular: id === '5K', // Mark 5K as popular
+  const stops = Array.from(VALID_CREDIT_STOPS).map((credits) => ({
+    credits,
+    price: calculatePrice(credits),
   }));
-  res.json({ packages });
+  res.json({ stops, tiers: PRICE_TIERS });
 });
 
 /**

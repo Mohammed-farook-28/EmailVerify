@@ -74,6 +74,7 @@ async function processVerificationJob(job: Job<VerificationJobData>): Promise<Up
 
     // Store result in PostgreSQL
     const resultId = nanoid();
+    const method = jobType === 'bulk' ? 'bulk' : 'web';
     await db.insert(verificationResult).values({
       id: resultId,
       userId,
@@ -82,7 +83,7 @@ async function processVerificationJob(job: Job<VerificationJobData>): Promise<Up
       score: result.score,
       deliverability: result.deliverability,
       attributes: result.attributes,
-      serverInfo: result.serverInfo,
+      serverInfo: { ...result.serverInfo, method },
     });
 
     await job.updateProgress(100);

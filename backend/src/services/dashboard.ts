@@ -132,7 +132,8 @@ export async function getDashboardStats(
  */
 export async function getStatusDistribution(
   userId: string,
-  rangeDays: number = 30
+  rangeDays: number = 30,
+  method?: string
 ): Promise<StatusDistribution[]> {
   // Validate range parameter
   if (!Number.isInteger(rangeDays) || rangeDays < 1 || rangeDays > 365) {
@@ -152,6 +153,19 @@ export async function getStatusDistribution(
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
 
+    // Build conditions
+    const conditions = [
+      eq(verificationResult.userId, userId),
+      gte(verificationResult.createdAt, cutoffDate),
+    ];
+
+    // Filter by method if specified
+    if (method && method !== 'all') {
+      conditions.push(
+        sql`${verificationResult.serverInfo}->>'method' = ${method}`
+      );
+    }
+
     // Get status counts
     const statusCounts = await db
       .select({
@@ -159,12 +173,7 @@ export async function getStatusDistribution(
         count: sql<number>`count(*)::int`,
       })
       .from(verificationResult)
-      .where(
-        and(
-          eq(verificationResult.userId, userId),
-          gte(verificationResult.createdAt, cutoffDate)
-        )
-      )
+      .where(and(...conditions))
       .groupBy(verificationResult.status)
       .execute();
 
@@ -279,7 +288,8 @@ export interface UsageByStatusDataPoint {
  */
 export async function getUsageByStatus(
   userId: string,
-  rangeDays: number = 7
+  rangeDays: number = 7,
+  method?: string
 ): Promise<UsageByStatusDataPoint[]> {
   if (!Number.isInteger(rangeDays) || rangeDays < 1 || rangeDays > 365) {
     throw new Error('rangeDays must be an integer between 1 and 365');
@@ -287,6 +297,19 @@ export async function getUsageByStatus(
 
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - rangeDays);
+
+  // Build conditions
+  const conditions = [
+    eq(verificationResult.userId, userId),
+    gte(verificationResult.createdAt, cutoffDate),
+  ];
+
+  // Filter by method if specified
+  if (method && method !== 'all') {
+    conditions.push(
+      sql`${verificationResult.serverInfo}->>'method' = ${method}`
+    );
+  }
 
   try {
     const rows = await db
@@ -296,12 +319,7 @@ export async function getUsageByStatus(
         count: sql<number>`count(*)::int`,
       })
       .from(verificationResult)
-      .where(
-        and(
-          eq(verificationResult.userId, userId),
-          gte(verificationResult.createdAt, cutoffDate)
-        )
-      )
+      .where(and(...conditions))
       .groupBy(sql`DATE(${verificationResult.createdAt})`, verificationResult.status)
       .orderBy(sql`DATE(${verificationResult.createdAt}) ASC`)
       .execute();

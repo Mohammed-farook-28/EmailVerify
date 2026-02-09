@@ -19,8 +19,9 @@
 
 import { Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
+import { nanoid } from 'nanoid';
 import { db } from '../db/index.js';
-import { bulkVerificationResult } from '../db/schema.js';
+import { bulkVerificationResult, verificationResult } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import { logger, createLogger } from '../config/logger.js';
 import { verifyWithCircuitBreaker, isCircuitOpen } from '../services/circuit-breaker.js';
@@ -112,7 +113,7 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
       // Process each email in the batch
       for (const result of batch) {
         try {
-          let verificationResult: UpstreamResult;
+          let upstreamResult: UpstreamResult;
 
           if (circuitOpen) {
             // Circuit breaker is open, mark as unknown
@@ -121,7 +122,7 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
               'Circuit breaker open, marking as unknown'
             );
 
-            verificationResult = {
+            upstreamResult = {
               email: result.email,
               status: 'unknown',
               score: 0,
@@ -142,36 +143,48 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
             };
           } else {
             // Verify email via circuit breaker
-            verificationResult = await verifyWithCircuitBreaker(
+            upstreamResult = await verifyWithCircuitBreaker(
               result.email,
               userId
             );
           }
 
-          // Update result in database
+          // Update result in bulk_verification_result table
           await db
             .update(bulkVerificationResult)
             .set({
-              status: verificationResult.status,
-              deliverable: verificationResult.deliverability === 'deliverable',
-              risky: verificationResult.deliverability === 'risky',
-              unknown: verificationResult.deliverability === 'unknown',
-              riskScore: verificationResult.score,
+              status: upstreamResult.status,
+              deliverable: upstreamResult.deliverability === 'deliverable',
+              risky: upstreamResult.deliverability === 'risky',
+              unknown: upstreamResult.deliverability === 'unknown',
+              riskScore: upstreamResult.score,
               mxRecords: {
-                found: verificationResult.attributes.mxRecordsFound,
+                found: upstreamResult.attributes.mxRecordsFound,
               },
-              smtpProvider: verificationResult.serverInfo.requestId, // Placeholder
-              isFreeEmail: verificationResult.attributes.freeProvider,
-              isRoleBased: verificationResult.attributes.roleAccount,
-              isCatchAll: verificationResult.attributes.catchAll,
-              isDisposable: verificationResult.attributes.disposable,
-              hasMxRecords: verificationResult.attributes.mxRecordsFound,
+              smtpProvider: upstreamResult.serverInfo.requestId, // Placeholder
+              isFreeEmail: upstreamResult.attributes.freeProvider,
+              isRoleBased: upstreamResult.attributes.roleAccount,
+              isCatchAll: upstreamResult.attributes.catchAll,
+              isDisposable: upstreamResult.attributes.disposable,
+              hasMxRecords: upstreamResult.attributes.mxRecordsFound,
             })
             .where(eq(bulkVerificationResult.id, result.id));
 
+          // Dual write to verification_result for unified usage history
+          await db.insert(verificationResult).values({
+            id: nanoid(),
+            userId,
+            email: result.email,
+            status: upstreamResult.status,
+            score: upstreamResult.score,
+            deliverability: upstreamResult.deliverability,
+            attributes: upstreamResult.attributes,
+            serverInfo: { ...upstreamResult.serverInfo, method: 'bulk', bulkJobId: jobId },
+          });
+
           // Update counts
           processedCount++;
-          switch (verificationResult.status) {
+          switch (upstreamResult.status) {
             case 'valid':
               validCount++;
               break;
@@ -192,7 +205,7 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
             'Email verification failed, marking as unknown'
           );
 
-          // Mark as unknown
+          // Mark as unknown in bulk_verification_result
           await db
             .update(bulkVerificationResult)
             .set({
@@ -203,6 +216,18 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
               riskScore: 0,
             })
             .where(eq(bulkVerificationResult.id, result.id));
+
+          // Dual write unknown result to verification_result
+          await db.insert(verificationResult).values({
+            id: nanoid(),
+            userId,
+            email: result.email,
+            status: 'unknown',
+            score: 0,
+            deliverability: 'unknown',
+            attributes: { disposable: false, freeProvider: false, roleAccount: false, catchAll: false, mxRecordsFound: false, smtpValid: false },
+            serverInfo: { processingTime: 0, requestId: 'bulk-error', timestamp: new Date().toISOString(), method: 'bulk', bulkJobId: jobId },
+          });
 
           processedCount++;
           unknownCount++;
