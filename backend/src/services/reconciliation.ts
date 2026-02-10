@@ -17,6 +17,7 @@ import { creditEvent, user } from '../db/schema.js';
 import { eq, sql, desc } from 'drizzle-orm';
 import { redis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
+import { reconciliationDriftGauge, reconciliationCorrectionsCounter, reconciliationDurationHistogram } from '../lib/metrics.js';
 
 /**
  * Reconciliation result for a single user
@@ -294,6 +295,11 @@ export async function reconcileAll(batchSize: number = 1000): Promise<Reconcilia
     }
 
     summary.duration = Date.now() - startTime;
+
+    // Update metrics
+    reconciliationDriftGauge.set(summary.totalDrift);
+    reconciliationCorrectionsCounter.inc(summary.corrected);
+    reconciliationDurationHistogram.observe(summary.duration / 1000);
 
     serviceLogger.info(
       {

@@ -23,7 +23,7 @@ import { verificationResult } from '../db/schema.js';
 import { redis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
 import { verifyWithCircuitBreaker, isCircuitOpen } from '../services/circuit-breaker.js';
-import { jobProcessingDuration, verificationCounter, verificationDuration, verificationErrorRate } from '../lib/metrics.js';
+import { jobProcessingDuration, verificationCounter, verificationDuration, verificationErrorRate, incrementStalledJobCounter } from '../lib/metrics.js';
 import type { VerificationJobData } from '../services/queue.js';
 import type { VerificationResult as UpstreamResult } from '../services/upstream-client.js';
 
@@ -201,6 +201,7 @@ worker.on('error', (error) => {
 
 worker.on('stalled', (jobId) => {
   logger.warn({ jobId }, 'Job stalled (worker may have crashed)');
+  incrementStalledJobCounter();
 });
 
 // Graceful shutdown

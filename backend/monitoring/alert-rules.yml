@@ -1,0 +1,74 @@
+groups:
+  - name: emailkit-alerts
+    rules:
+      - alert: QueueDepthHigh
+        expr: emailkit_queue_depth{status="waiting"} > 500000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue depth is high"
+          description: "Waiting jobs exceeded 500K (current: {{ $value }})"
+
+      - alert: QueueDepthCritical
+        expr: emailkit_queue_depth{status="waiting"} > 800000
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Queue depth is critically high"
+          description: "Waiting jobs exceeded 800K (current: {{ $value }})"
+
+      - alert: CircuitBreakerOpen
+        expr: emailkit_circuit_breaker_state == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker is OPEN"
+          description: "Upstream API circuit breaker has tripped open"
+
+      - alert: HighVerificationErrorRate
+        expr: rate(emailkit_verification_errors_total[5m]) / rate(emailkit_verifications_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High verification error rate"
+          description: "Error rate exceeded 10% over 5m (current: {{ $value | humanizePercentage }})"
+
+      - alert: CreditReconciliationDrift
+        expr: emailkit_reconciliation_drift > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Credit reconciliation drift detected"
+          description: "Reconciliation drift exceeded 100 credits (current: {{ $value }})"
+
+      - alert: DLQDepthHigh
+        expr: emailkit_dlq_depth > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ depth is high"
+          description: "Dead letter queue has more than 1000 jobs (current: {{ $value }})"
+
+      - alert: LoadSheddingActive
+        expr: rate(emailkit_load_shedding_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Load shedding is active"
+          description: "Requests are being shed due to overload"
+
+      - alert: HighHTTP503Rate
+        expr: rate(emailkit_http_requests_total{status_code="503"}[5m]) / rate(emailkit_http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP 503 rate"
+          description: "503 rate exceeded 5% over 5m (current: {{ $value | humanizePercentage }})"

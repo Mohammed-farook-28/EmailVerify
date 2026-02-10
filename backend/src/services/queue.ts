@@ -17,7 +17,7 @@
 import { Queue, QueueEvents } from 'bullmq';
 import IORedis from 'ioredis';
 import { logger } from '../config/logger.js';
-import { queueDepthGauge } from '../lib/metrics.js';
+import { queueDepthGauge, dlqDepthGauge } from '../lib/metrics.js';
 
 // Create Redis connection for BullMQ
 const connection = new IORedis.default({
@@ -103,6 +103,10 @@ setInterval(async () => {
     queueDepthGauge.set({ status: 'active' }, active);
     queueDepthGauge.set({ status: 'delayed' }, delayed);
     queueDepthGauge.set({ status: 'failed' }, failed);
+
+    // DLQ depth
+    const dlqWaiting = await dlqQueue.getWaitingCount();
+    dlqDepthGauge.set(dlqWaiting);
   } catch (error) {
     logger.warn({ error }, 'Failed to update queue depth metrics');
   }

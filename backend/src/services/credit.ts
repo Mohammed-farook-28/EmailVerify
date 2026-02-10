@@ -5,6 +5,7 @@ import { env } from '../config/env.js';
 import { nanoid } from 'nanoid';
 import { redis } from '../config/redis.js';
 import { logger } from '../config/logger.js';
+import { creditBalanceGauge, creditDeductionCounter, creditRefundCounter } from '../lib/metrics.js';
 
 /** Transaction-or-DB type for passing an existing transaction */
 export type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -50,6 +51,9 @@ export async function awardSignupBonus(userId: string): Promise<void> {
       idempotencyKey: `signup_bonus:${userId}`,
       createdAt: new Date(),
     });
+
+    // Update metrics
+    creditBalanceGauge.set({ user_id: userId }, newBalance);
 
     logger.info({ userId, bonusAmount }, 'Awarded signup bonus credits');
   } catch (error) {
@@ -140,6 +144,10 @@ export async function deductCredits(
     // Update Redis cache
     await redis.set(`credit:balance:${userId}`, newBalance.toString());
 
+    // Update metrics
+    creditBalanceGauge.set({ user_id: userId }, newBalance);
+    creditDeductionCounter.labels('verification').inc();
+
     return newBalance;
   });
 }
@@ -182,6 +190,10 @@ export async function refundCredits(
 
     // Update Redis cache
     await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    // Update metrics
+    creditBalanceGauge.set({ user_id: userId }, newBalance);
+    creditRefundCounter.labels('failed_verification').inc();
 
     return newBalance;
   });
@@ -242,6 +254,9 @@ export async function addPurchaseCredits(
 
     // Update Redis cache
     await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    // Update metrics
+    creditBalanceGauge.set({ user_id: userId }, newBalance);
 
     return newBalance;
   });
@@ -305,6 +320,9 @@ export async function addSubscriptionCredits(
 
     // Update Redis cache
     await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    // Update metrics
+    creditBalanceGauge.set({ user_id: userId }, newBalance);
 
     return newBalance;
   };
@@ -373,6 +391,9 @@ export async function expireSubscriptionCredits(
 
     // Update Redis cache
     await redis.set(`credit:balance:${userId}`, newBalance.toString());
+
+    // Update metrics
+    creditBalanceGauge.set({ user_id: userId }, newBalance);
 
     return newBalance;
   };
