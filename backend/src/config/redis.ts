@@ -9,6 +9,16 @@ export const redis = new IORedis.default(env.redisUrl, {
   },
 });
 
+/** Redis connection configured for BullMQ workers (maxRetriesPerRequest must be null) */
+export const bullRedis = new IORedis.default(env.redisUrl, {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+  retryStrategy(times: number) {
+    const delay = Math.min(times * 200, 5_000);
+    return delay;
+  },
+});
+
 /** Dedicated Redis connection for pub/sub subscriptions (cannot reuse main connection) */
 const redisSub = new IORedis.default(env.redisUrl, {
   maxRetriesPerRequest: 3,
@@ -69,5 +79,6 @@ export const pubsub = new PubSubManager();
 
 export async function closeRedis(): Promise<void> {
   await redisSub.quit();
+  await bullRedis.quit();
   await redis.quit();
 }

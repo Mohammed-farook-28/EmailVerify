@@ -10,7 +10,7 @@
  */
 
 import { Queue, Worker, Job } from 'bullmq';
-import { redis } from '../config/redis.js';
+import { redis, bullRedis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { bulkJob, user } from '../db/schema.js';
@@ -23,7 +23,7 @@ interface NotifyJobData {
 
 // Create notification queue
 const notifyQueue = new Queue<NotifyJobData>('result-expiry-notify', {
-  connection: redis,
+  connection: bullRedis,
 });
 
 // Track which notifications have been sent to avoid duplicates
@@ -284,7 +284,7 @@ export function createResultExpiryNotifyWorker(): Worker<NotifyJobData> {
       return await processNotifications(job);
     },
     {
-      connection: redis,
+      connection: bullRedis,
       concurrency: 1,
     }
   );

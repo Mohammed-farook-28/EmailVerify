@@ -1,0 +1,11 @@
+node_modules
+dist
+tests
+.env
+.env.*
+!.env.production.example
+.git
+.gitignore
+*.md
+vitest.config.ts
+drizzle.config.ts

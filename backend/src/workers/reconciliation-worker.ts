@@ -6,7 +6,7 @@
  */
 
 import { Queue, Worker, Job } from 'bullmq';
-import { redis } from '../config/redis.js';
+import { bullRedis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
 import { reconcileAll } from '../services/reconciliation.js';
 
@@ -20,7 +20,7 @@ interface ReconciliationJobData {
 
 // Create reconciliation queue
 const reconciliationQueue = new Queue<ReconciliationJobData>('credit-reconciliation', {
-  connection: redis,
+  connection: bullRedis,
 });
 
 /**
@@ -77,7 +77,7 @@ export function createReconciliationWorker(): Worker<ReconciliationJobData> {
       await processReconciliation(job);
     },
     {
-      connection: redis,
+      connection: bullRedis,
       concurrency: 1, // Only one reconciliation at a time
     }
   );

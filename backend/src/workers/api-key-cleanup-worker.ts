@@ -6,7 +6,7 @@
  */
 
 import { Queue, Worker, Job } from 'bullmq';
-import { redis } from '../config/redis.js';
+import { bullRedis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { apiKey } from '../db/schema.js';
@@ -18,7 +18,7 @@ interface CleanupJobData {
 
 // Create cleanup queue
 const cleanupQueue = new Queue<CleanupJobData>('api-key-cleanup', {
-  connection: redis,
+  connection: bullRedis,
 });
 
 /**
@@ -104,7 +104,7 @@ export function createApiKeyCleanupWorker(): Worker<CleanupJobData> {
       return await processCleanup(job);
     },
     {
-      connection: redis,
+      connection: bullRedis,
       concurrency: 1, // Only one cleanup at a time
     }
   );

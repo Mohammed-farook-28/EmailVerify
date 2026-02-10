@@ -8,7 +8,7 @@
  */
 
 import { Job, Worker } from 'bullmq';
-import { redis } from '../config/redis.js';
+import { bullRedis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
 import { refundCredits } from '../services/credit.js';
 import { incrementDlqMetrics } from '../lib/metrics.js';
@@ -177,7 +177,7 @@ export function createDlqWorker(): Worker<VerificationJobData> {
       await processDlqJob(job);
     },
     {
-      connection: redis,
+      connection: bullRedis,
       concurrency: 10, // Process 10 DLQ jobs concurrently
       removeOnComplete: { count: 100 }, // Keep last 100 completed DLQ jobs
       removeOnFail: { count: 100 }, // Keep last 100 failed DLQ jobs

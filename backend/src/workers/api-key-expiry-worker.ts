@@ -6,7 +6,7 @@
  */
 
 import { Queue, Worker, Job } from 'bullmq';
-import { redis } from '../config/redis.js';
+import { bullRedis } from '../config/redis.js';
 import { logger, createLogger } from '../config/logger.js';
 import { db } from '../db/index.js';
 import { apiKey } from '../db/schema.js';
@@ -18,7 +18,7 @@ interface ExpiryJobData {
 
 // Create expiry check queue
 const expiryQueue = new Queue<ExpiryJobData>('api-key-expiry', {
-  connection: redis,
+  connection: bullRedis,
 });
 
 /**
@@ -101,7 +101,7 @@ export function createApiKeyExpiryWorker(): Worker<ExpiryJobData> {
       return await processExpiryCheck(job);
     },
     {
-      connection: redis,
+      connection: bullRedis,
       concurrency: 1, // Only one check at a time
     }
   );
