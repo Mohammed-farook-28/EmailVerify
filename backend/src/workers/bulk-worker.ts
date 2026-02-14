@@ -1,38 +1,37 @@
 /**
  * Bulk Email Verification Worker
  *
- * Processes bulk verification jobs from BullMQ queue.
- * Concurrency: 50 jobs per worker instance
+ * Processes bulk verification jobs by polling the upstream /verify/file API.
  *
  * Job Processing:
- * 1. Fetch pending emails in batches of 100
- * 2. Verify each email via circuit breaker
- * 3. Update results in database
- * 4. Update job progress (every 1% or 5 seconds)
- * 5. On completion, generate CSV and upload to S3
+ * 1. Mark job as PROCESSING
+ * 2. Poll upstream GET /verify/file/{taskId} for progress
+ * 3. Update our bulk_job record with upstream progress
+ * 4. When upstream completes, download results
+ * 5. Insert results into bulk_verification_result table
+ * 6. Generate CSV and upload to S3
  *
  * Error Handling:
- * - Individual email failures don't fail the entire job
- * - Job continues even if circuit breaker opens
- * - Failed emails are marked as 'unknown'
+ * - Upstream failures are retried by BullMQ (3 attempts, exponential backoff)
+ * - If upstream job fails, our job is marked as failed
  */
 
 import { Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { nanoid } from 'nanoid';
-import pLimit from 'p-limit';
 import { db } from '../db/index.js';
 import { bulkVerificationResult, verificationResult } from '../db/schema.js';
-import { eq, and } from 'drizzle-orm';
 import { logger, createLogger } from '../config/logger.js';
-import { verifyWithCircuitBreaker, isCircuitOpen } from '../services/circuit-breaker.js';
+import {
+  getUpstreamFileJobStatus,
+  downloadUpstreamResults,
+} from '../services/upstream-client.js';
 import {
   updateBulkJobStatus,
   getBulkJob,
 } from '../services/bulk-verification.js';
 import { generateAndUploadResults } from '../services/result-storage.js';
 import { JobStatus } from '../types/bulk.js';
-import type { VerificationResult as UpstreamResult } from '../services/upstream-client.js';
 
 // Create Redis connection for worker
 const connection = new IORedis.default({
@@ -45,26 +44,68 @@ const connection = new IORedis.default({
 
 // Worker concurrency
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '50', 10);
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '100', 10);
+
+// Polling interval for upstream job status (ms)
+const POLL_INTERVAL = parseInt(process.env.UPSTREAM_POLL_INTERVAL || '3000', 10);
+
+// Max poll duration before timing out (ms) — 2 hours
+const MAX_POLL_DURATION = parseInt(process.env.MAX_POLL_DURATION || '7200000', 10);
 
 interface BulkJobData {
   jobId: string;
   userId: string;
   totalCount: number;
+  upstreamJobId: string;
 }
 
 /**
- * Process a bulk verification job
+ * Sleep helper
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Map upstream status string to our internal status
+ */
+function mapStatus(status: string): 'valid' | 'invalid' | 'risky' | 'unknown' {
+  const statusMap: Record<string, 'valid' | 'invalid' | 'risky' | 'unknown'> = {
+    valid: 'valid',
+    invalid: 'invalid',
+    risky: 'risky',
+    unknown: 'unknown',
+    role: 'risky',
+    disposable: 'invalid',
+    'catch-all': 'risky',
+    'catch_all': 'risky',
+    spamtrap: 'invalid',
+    abuse: 'risky',
+    'do_not_mail': 'invalid',
+  };
+  return statusMap[status] || 'unknown';
+}
+
+/**
+ * Process a bulk verification job by polling upstream /verify/file
  */
 async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
-  const { jobId, userId, totalCount } = job.data;
+  const { jobId, userId, totalCount, upstreamJobId } = job.data;
   const jobLogger = createLogger({
     bulkJobId: jobId,
     userId,
     totalCount,
+    upstreamJobId,
   });
 
-  jobLogger.info('Starting bulk verification job');
+  jobLogger.info('Starting bulk verification job (upstream file mode)');
+
+  if (!upstreamJobId) {
+    jobLogger.error('No upstreamJobId provided, cannot process job');
+    await updateBulkJobStatus(jobId, JobStatus.FAILED, {
+      completedAt: new Date(),
+    });
+    throw new Error('Missing upstreamJobId');
+  }
 
   try {
     // Mark job as processing
@@ -72,195 +113,48 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
       startedAt: new Date(),
     });
 
-    let processedCount = 0;
-    let validCount = 0;
-    let invalidCount = 0;
-    let riskyCount = 0;
-    let unknownCount = 0;
-    let lastProgressUpdate = Date.now();
+    // Poll upstream for progress
+    const pollStartTime = Date.now();
     let lastProgressPercentage = 0;
 
-    // Process in batches
-    while (processedCount < totalCount) {
-      // Fetch next batch of pending results
-      const batch = await db
-        .select()
-        .from(bulkVerificationResult)
-        .where(
-          and(
-            eq(bulkVerificationResult.jobId, jobId),
-            eq(bulkVerificationResult.status, 'pending')
-          )
-        )
-        .limit(BATCH_SIZE);
-
-      if (batch.length === 0) {
-        // No more pending results
-        break;
+    while (true) {
+      // Check for timeout
+      if (Date.now() - pollStartTime > MAX_POLL_DURATION) {
+        jobLogger.error('Upstream job polling timed out');
+        await updateBulkJobStatus(jobId, JobStatus.FAILED, {
+          completedAt: new Date(),
+        });
+        throw new Error('Upstream job timed out');
       }
 
-      jobLogger.info(
+      const upstreamStatus = await getUpstreamFileJobStatus(upstreamJobId);
+
+      jobLogger.debug(
         {
-          batchSize: batch.length,
-          processedCount,
-          totalCount,
+          upstreamStatus: upstreamStatus.status,
+          progress: upstreamStatus.progress_percent,
+          processed: upstreamStatus.processed_emails,
         },
-        'Processing batch'
+        'Upstream status poll'
       );
 
-      // Check circuit breaker state
-      const circuitOpen = await isCircuitOpen();
+      // Update our job with upstream progress
+      const processedCount = upstreamStatus.processed_emails || 0;
+      const currentPercentage = upstreamStatus.progress_percent || 0;
 
-      // Process emails in parallel (10 concurrent verifications per batch)
-      const limit = pLimit(10);
-
-      const promises = batch.map((result) => limit(async () => {
-        try {
-          let upstreamResult: UpstreamResult;
-
-          if (circuitOpen) {
-            // Circuit breaker is open, mark as unknown
-            jobLogger.warn(
-              { email: result.email },
-              'Circuit breaker open, marking as unknown'
-            );
-
-            upstreamResult = {
-              email: result.email,
-              status: 'unknown',
-              score: 0,
-              deliverability: 'unknown',
-              attributes: {
-                disposable: false,
-                freeProvider: false,
-                roleAccount: false,
-                catchAll: false,
-                mxRecordsFound: false,
-                smtpValid: false,
-              },
-              serverInfo: {
-                processingTime: 0,
-                requestId: 'circuit-breaker-open',
-                timestamp: new Date().toISOString(),
-              },
-            };
-          } else {
-            // Verify email via circuit breaker
-            upstreamResult = await verifyWithCircuitBreaker(
-              result.email,
-              userId
-            );
-          }
-
-          // Update result in bulk_verification_result table
-          await db
-            .update(bulkVerificationResult)
-            .set({
-              status: upstreamResult.status,
-              deliverable: upstreamResult.deliverability === 'deliverable',
-              risky: upstreamResult.deliverability === 'risky',
-              unknown: upstreamResult.deliverability === 'unknown',
-              riskScore: upstreamResult.score,
-              mxRecords: {
-                found: upstreamResult.attributes.mxRecordsFound,
-              },
-              smtpProvider: upstreamResult.serverInfo.requestId, // Placeholder
-              isFreeEmail: upstreamResult.attributes.freeProvider,
-              isRoleBased: upstreamResult.attributes.roleAccount,
-              isCatchAll: upstreamResult.attributes.catchAll,
-              isDisposable: upstreamResult.attributes.disposable,
-              hasMxRecords: upstreamResult.attributes.mxRecordsFound,
-            })
-            .where(eq(bulkVerificationResult.id, result.id));
-
-          // Dual write to verification_result for unified usage history
-          await db.insert(verificationResult).values({
-            id: nanoid(),
-            userId,
-            email: result.email.toLowerCase(),
-            status: upstreamResult.status,
-            score: upstreamResult.score,
-            deliverability: upstreamResult.deliverability,
-            attributes: upstreamResult.attributes,
-            serverInfo: { ...upstreamResult.serverInfo, method: 'bulk', bulkJobId: jobId },
-          });
-
-          // Update counts (JS is single-threaded, safe after await)
-          processedCount++;
-          switch (upstreamResult.status) {
-            case 'valid':
-              validCount++;
-              break;
-            case 'invalid':
-              invalidCount++;
-              break;
-            case 'risky':
-              riskyCount++;
-              break;
-            case 'unknown':
-              unknownCount++;
-              break;
-          }
-        } catch (error: any) {
-          // Individual email verification failed
-          jobLogger.error(
-            { email: result.email, error },
-            'Email verification failed, marking as unknown'
-          );
-
-          // Mark as unknown in bulk_verification_result
-          await db
-            .update(bulkVerificationResult)
-            .set({
-              status: 'unknown',
-              deliverable: false,
-              risky: false,
-              unknown: true,
-              riskScore: 0,
-            })
-            .where(eq(bulkVerificationResult.id, result.id));
-
-          // Dual write unknown result to verification_result
-          await db.insert(verificationResult).values({
-            id: nanoid(),
-            userId,
-            email: result.email.toLowerCase(),
-            status: 'unknown',
-            score: 0,
-            deliverability: 'unknown',
-            attributes: { disposable: false, freeProvider: false, roleAccount: false, catchAll: false, mxRecordsFound: false, smtpValid: false },
-            serverInfo: { processingTime: 0, requestId: 'bulk-error', timestamp: new Date().toISOString(), method: 'bulk', bulkJobId: jobId },
-          });
-
-          processedCount++;
-          unknownCount++;
-        }
-      }));
-
-      await Promise.allSettled(promises);
-
-      // Calculate progress
-      const currentPercentage = Math.round(
-        (processedCount / totalCount) * 100
-      );
-      const timeSinceLastUpdate = Date.now() - lastProgressUpdate;
-
-      // Emit progress if 1% or 5 seconds passed
-      const shouldEmitProgress =
-        currentPercentage > lastProgressPercentage ||
-        timeSinceLastUpdate >= 5000;
-
-      if (shouldEmitProgress) {
+      if (currentPercentage > lastProgressPercentage) {
         await updateBulkJobStatus(jobId, JobStatus.PROCESSING, {
           processedCount,
-          validCount,
-          invalidCount,
-          riskyCount,
-          unknownCount,
+          validCount: upstreamStatus.valid_count,
+          invalidCount: upstreamStatus.invalid_count,
+          riskyCount: upstreamStatus.risky_count,
+          unknownCount: upstreamStatus.unknown_count,
         });
 
-        lastProgressUpdate = Date.now();
         lastProgressPercentage = currentPercentage;
+
+        // Update BullMQ job progress
+        await job.updateProgress(currentPercentage);
 
         jobLogger.info(
           {
@@ -270,20 +164,110 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
           },
           'Progress update'
         );
-
-        // Update BullMQ job progress
-        await job.updateProgress(currentPercentage);
       }
+
+      // Check if upstream job is done
+      if (upstreamStatus.status === 'completed') {
+        jobLogger.info('Upstream job completed, downloading results');
+        break;
+      }
+
+      if (upstreamStatus.status === 'failed') {
+        jobLogger.error('Upstream job failed');
+        await updateBulkJobStatus(jobId, JobStatus.FAILED, {
+          completedAt: new Date(),
+        });
+        throw new Error('Upstream verification job failed');
+      }
+
+      // Wait before next poll
+      await sleep(POLL_INTERVAL);
     }
 
-    // Job complete - generate results CSV and upload to S3
-    jobLogger.info('Bulk job complete, generating results CSV');
+    // Download results from upstream
+    const results = await downloadUpstreamResults(upstreamJobId);
 
+    jobLogger.info(
+      { resultCount: results.length },
+      'Downloaded upstream results, inserting into database'
+    );
+
+    // Insert results into bulk_verification_result table
+    let validCount = 0;
+    let invalidCount = 0;
+    let riskyCount = 0;
+    let unknownCount = 0;
+
+    const BATCH_SIZE = 1000;
+    for (let i = 0; i < results.length; i += BATCH_SIZE) {
+      const batch = results.slice(i, i + BATCH_SIZE);
+
+      const bulkResultRecords = batch.map((row) => {
+        const mappedStatus = mapStatus(row.status);
+        switch (mappedStatus) {
+          case 'valid': validCount++; break;
+          case 'invalid': invalidCount++; break;
+          case 'risky': riskyCount++; break;
+          case 'unknown': unknownCount++; break;
+        }
+
+        return {
+          id: nanoid(),
+          jobId,
+          email: row.email.toLowerCase(),
+          status: mappedStatus,
+          deliverable: row.is_deliverable,
+          risky: mappedStatus === 'risky',
+          unknown: mappedStatus === 'unknown',
+          riskScore: row.score,
+          mxRecords: row.mx_records ? { records: row.mx_records } : null,
+          smtpProvider: null,
+          isFreeEmail: row.is_free,
+          isRoleBased: row.is_role,
+          isCatchAll: row.is_catchall,
+          isDisposable: row.is_disposable,
+          hasMxRecords: Array.isArray(row.mx_records) && row.mx_records.length > 0,
+          createdAt: new Date(),
+        };
+      });
+
+      await db.insert(bulkVerificationResult).values(bulkResultRecords);
+
+      // Dual write to verification_result for unified usage history
+      const unifiedRecords = batch.map((row) => ({
+        id: nanoid(),
+        userId,
+        email: row.email.toLowerCase(),
+        status: mapStatus(row.status),
+        score: row.score,
+        deliverability: row.is_deliverable ? 'deliverable' : (mapStatus(row.status) === 'risky' ? 'risky' : (mapStatus(row.status) === 'unknown' ? 'unknown' : 'undeliverable')),
+        attributes: {
+          disposable: row.is_disposable,
+          freeProvider: row.is_free,
+          roleAccount: row.is_role,
+          catchAll: row.is_catchall,
+          mxRecordsFound: Array.isArray(row.mx_records) && row.mx_records.length > 0,
+          smtpValid: row.smtp_check,
+        },
+        serverInfo: {
+          processingTime: 0,
+          requestId: `upstream-file-${upstreamJobId}`,
+          timestamp: new Date().toISOString(),
+          method: 'bulk',
+          bulkJobId: jobId,
+        },
+      }));
+
+      await db.insert(verificationResult).values(unifiedRecords);
+    }
+
+    // Generate CSV and upload to S3
+    jobLogger.info('Results inserted, generating CSV for S3');
     const resultUrl = await generateAndUploadResults(jobId);
 
     // Mark job as completed
     await updateBulkJobStatus(jobId, JobStatus.COMPLETED, {
-      processedCount,
+      processedCount: results.length,
       validCount,
       invalidCount,
       riskyCount,
@@ -294,7 +278,7 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
 
     jobLogger.info(
       {
-        processedCount,
+        processedCount: results.length,
         validCount,
         invalidCount,
         riskyCount,
@@ -306,10 +290,13 @@ async function processBulkJob(job: Job<BulkJobData>): Promise<void> {
   } catch (error: any) {
     jobLogger.error({ error }, 'Bulk verification job failed');
 
-    // Mark job as failed
-    await updateBulkJobStatus(jobId, JobStatus.FAILED, {
-      completedAt: new Date(),
-    });
+    // Mark job as failed (if not already)
+    const currentJob = await getBulkJob(jobId);
+    if (currentJob && currentJob.status !== JobStatus.FAILED) {
+      await updateBulkJobStatus(jobId, JobStatus.FAILED, {
+        completedAt: new Date(),
+      });
+    }
 
     throw error;
   }

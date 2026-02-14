@@ -27,6 +27,7 @@ export interface BulkJob {
   completedAt?: Date;
   resultExpiresAt?: Date;
   resultUrl?: string;
+  upstreamJobId?: string;
 }
 
 export interface VerificationResult {

@@ -11,6 +11,7 @@
 
 import { Pool } from 'undici';
 import { createHash } from 'crypto';
+import { readFile } from 'fs/promises';
 import { redis } from '../config/redis.js';
 import { logger } from '../config/logger.js';
 import { activeConnections, connectionPoolSize } from '../lib/metrics.js';
@@ -205,9 +206,8 @@ export async function callUpstreamAPI(
   // Build request based on whether we're using mock or real API
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...getUpstreamAuthHeaders(),
   };
-
-  headers['Authorization'] = `Bearer ${UPSTREAM_API_KEY}`;
 
   const body = IS_MOCK
     ? JSON.stringify({ email })
@@ -290,6 +290,258 @@ export async function callUpstreamAPI(
   }
 }
 
+// =============================================
+// File-based Bulk Verification (upstream /verify/file)
+// =============================================
+
+/** Response from POST /verify/file */
+export interface UpstreamFileUploadResponse {
+  task_id: string;
+  status: string;
+  estimated_count: number;
+}
+
+/** Response from GET /verify/file/{job_id} */
+export interface UpstreamFileJobStatus {
+  task_id: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  processed_emails: number;
+  total_emails: number;
+  progress_percent: number;
+  valid_count: number;
+  invalid_count: number;
+  risky_count: number;
+  unknown_count: number;
+  download_url?: string;
+  process_time_seconds?: number;
+}
+
+/** A single row from the upstream results CSV */
+export interface UpstreamResultRow {
+  email: string;
+  status: string;
+  score: number;
+  is_deliverable: boolean;
+  is_disposable: boolean;
+  is_catchall: boolean;
+  is_role: boolean;
+  is_free: boolean;
+  mx_records: string[];
+  smtp_check: boolean;
+  reason: string;
+}
+
+/**
+ * Build auth headers for the upstream API.
+ * Mock uses Bearer token; real API uses EMAILVERIFY-API-KEY header.
+ */
+function getUpstreamAuthHeaders(): Record<string, string> {
+  if (IS_MOCK) {
+    return { 'Authorization': `Bearer ${UPSTREAM_API_KEY}` };
+  }
+  return { 'EMAILVERIFY-API-KEY': UPSTREAM_API_KEY };
+}
+
+/**
+ * Upload a file to the upstream /verify/file endpoint.
+ * Uses native fetch for FormData multipart upload.
+ *
+ * @param filePath - Path to the CSV/Excel file
+ * @param filename - Original filename
+ * @returns Upstream task_id and estimated count
+ */
+export async function uploadFileToUpstream(
+  filePath: string,
+  filename: string
+): Promise<UpstreamFileUploadResponse> {
+  const startTime = Date.now();
+
+  try {
+    const fileBuffer = await readFile(filePath);
+    const blob = new Blob([fileBuffer]);
+
+    const formData = new FormData();
+    formData.append('file', blob, filename);
+
+    const url = `${upstreamOrigin}${upstreamPathPrefix}/verify/file`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: getUpstreamAuthHeaders(),
+      body: formData,
+    });
+
+    const duration = Date.now() - startTime;
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error(
+        { statusCode: response.status, error: errorText, duration },
+        'Upstream file upload failed'
+      );
+      throw new Error(`Upstream file upload error: ${response.status} - ${errorText}`);
+    }
+
+    const result = await response.json() as any;
+
+    // Handle both mock and real API response shapes
+    const data = result.data || result;
+    const taskId = data.task_id || data.taskId;
+    const estimatedCount = data.estimated_count || data.estimatedCount || 0;
+
+    logger.info(
+      { taskId, estimatedCount, duration },
+      'File uploaded to upstream successfully'
+    );
+
+    return {
+      task_id: taskId,
+      status: data.status || 'pending',
+      estimated_count: estimatedCount,
+    };
+  } catch (error: any) {
+    const duration = Date.now() - startTime;
+    logger.error(
+      { error: error.message, duration },
+      'Failed to upload file to upstream'
+    );
+    throw error;
+  }
+}
+
+/**
+ * Get the status/progress of an upstream file verification job.
+ *
+ * @param taskId - The upstream task_id from file upload
+ * @returns Current job status with progress details
+ */
+export async function getUpstreamFileJobStatus(
+  taskId: string
+): Promise<UpstreamFileJobStatus> {
+  try {
+    const response = await pool.request({
+      path: `${upstreamPathPrefix}/verify/file/${taskId}`,
+      method: 'GET',
+      headers: {
+        ...getUpstreamAuthHeaders(),
+        'Content-Type': 'application/json',
+      },
+      bodyTimeout: 15_000,
+      headersTimeout: 10_000,
+    });
+
+    if (response.statusCode !== 200) {
+      const errorText = await response.body.text();
+      throw new Error(`Upstream status check error: ${response.statusCode} - ${errorText}`);
+    }
+
+    const result = await response.body.json() as any;
+    const data = result.data || result;
+
+    return {
+      task_id: data.task_id || taskId,
+      status: data.status,
+      processed_emails: data.processed_emails || 0,
+      total_emails: data.total_emails || 0,
+      progress_percent: data.progress_percent || 0,
+      valid_count: data.valid_count || 0,
+      invalid_count: data.invalid_count || 0,
+      risky_count: data.risky_count || 0,
+      unknown_count: data.unknown_count || 0,
+      download_url: data.download_url,
+      process_time_seconds: data.process_time_seconds,
+    };
+  } catch (error: any) {
+    logger.error(
+      { taskId, error: error.message },
+      'Failed to get upstream file job status'
+    );
+    throw error;
+  }
+}
+
+/**
+ * Download results from an upstream file verification job.
+ * Returns parsed result rows.
+ *
+ * @param taskId - The upstream task_id
+ * @returns Array of result rows
+ */
+export async function downloadUpstreamResults(
+  taskId: string
+): Promise<UpstreamResultRow[]> {
+  try {
+    const response = await pool.request({
+      path: `${upstreamPathPrefix}/verify/file/${taskId}/results`,
+      method: 'GET',
+      headers: {
+        ...getUpstreamAuthHeaders(),
+        'Accept': 'application/json',
+      },
+      bodyTimeout: 60_000, // 60s for large result downloads
+      headersTimeout: 10_000,
+    });
+
+    if (response.statusCode !== 200) {
+      const errorText = await response.body.text();
+      throw new Error(`Upstream results download error: ${response.statusCode} - ${errorText}`);
+    }
+
+    const contentType = response.headers['content-type'] || '';
+
+    // If JSON response, parse directly
+    if (contentType.includes('application/json')) {
+      const result = await response.body.json() as any;
+      const data = result.data || result;
+      return Array.isArray(data) ? data : data.results || [];
+    }
+
+    // If CSV response, parse CSV text into rows
+    const csvText = await response.body.text();
+    return parseUpstreamCSV(csvText);
+  } catch (error: any) {
+    logger.error(
+      { taskId, error: error.message },
+      'Failed to download upstream results'
+    );
+    throw error;
+  }
+}
+
+/**
+ * Parse CSV text from upstream results into structured rows
+ */
+function parseUpstreamCSV(csvText: string): UpstreamResultRow[] {
+  const lines = csvText.trim().split('\n');
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+  const results: UpstreamResultRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(',').map(v => v.trim());
+    const row: any = {};
+    headers.forEach((header, idx) => {
+      row[header] = values[idx] || '';
+    });
+
+    results.push({
+      email: row.email || '',
+      status: row.status || 'unknown',
+      score: parseFloat(row.score) || 0,
+      is_deliverable: row.is_deliverable === 'true' || row.deliverable === 'true',
+      is_disposable: row.is_disposable === 'true' || row.disposable === 'true',
+      is_catchall: row.is_catchall === 'true' || row.catchall === 'true' || row.catch_all === 'true',
+      is_role: row.is_role === 'true' || row.role === 'true',
+      is_free: row.is_free === 'true' || row.free === 'true',
+      mx_records: row.mx_records ? row.mx_records.split(';') : [],
+      smtp_check: row.smtp_check === 'true',
+      reason: row.reason || '',
+    });
+  }
+
+  return results;
+}
+
 /**
  * Close the connection pool gracefully
  */
@@ -300,5 +552,8 @@ export async function closePool(): Promise<void> {
 
 export default {
   callUpstreamAPI,
+  uploadFileToUpstream,
+  getUpstreamFileJobStatus,
+  downloadUpstreamResults,
   closePool,
 };

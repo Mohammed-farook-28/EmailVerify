@@ -4,10 +4,12 @@ import { eq, and, or, sql, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { deductCredits } from './credit.js';
 import { parseEmailFile } from './file-parser.js';
+import { uploadFileToUpstream } from './upstream-client.js';
 import { JobStatus, SourceType, type BulkUploadResponse } from '../types/bulk.js';
 import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { redis } from '../config/redis.js';
+import { logger } from '../config/logger.js';
 
 // Create Redis connection for BullMQ
 const connection = new IORedis.default({
@@ -63,8 +65,15 @@ export async function getActiveJob(userId: string) {
 /**
  * Create a new bulk verification job
  *
- * Uses a Redis lock to prevent concurrent bulk job creation for the same user,
- * and wraps credit deduction + DB inserts in a transaction for atomicity.
+ * Flow:
+ * 1. Parse file locally for validation and email count
+ * 2. Deduct credits in a DB transaction
+ * 3. Create bulk_job record
+ * 4. Upload file to upstream /verify/file API
+ * 5. Store upstream task_id in bulk_job
+ * 6. Enqueue worker job to poll for progress
+ *
+ * Uses a Redis lock to prevent concurrent bulk job creation for the same user.
  */
 export async function createBulkJob(
   params: CreateBulkJobParams
@@ -73,7 +82,7 @@ export async function createBulkJob(
 
   // Acquire Redis lock to prevent concurrent bulk job creation
   const lockKey = `bulkjob:lock:${userId}`;
-  const lockAcquired = await redis.set(lockKey, '1', 'EX', 30, 'NX');
+  const lockAcquired = await redis.set(lockKey, '1', 'EX', 60, 'NX');
   if (!lockAcquired) {
     throw new Error('A bulk job is already being created. Please try again shortly.');
   }
@@ -87,9 +96,9 @@ export async function createBulkJob(
       );
     }
 
-    // Parse the file
+    // Parse the file locally for validation and count
     const parseResult = await parseEmailFile(filePath, filename);
-    const { emails, totalCount } = parseResult;
+    const { totalCount } = parseResult;
 
     if (totalCount === 0) {
       throw new Error('No valid emails found in file');
@@ -109,7 +118,7 @@ export async function createBulkJob(
     const resultExpiresAt = new Date();
     resultExpiresAt.setDate(resultExpiresAt.getDate() + retentionDays);
 
-    // Wrap credit deduction + DB inserts in a transaction
+    // Wrap credit deduction + job creation in a transaction
     await db.transaction(async (tx) => {
       // Deduct credits within the transaction
       const latestEvent = await tx
@@ -139,7 +148,7 @@ export async function createBulkJob(
         createdAt: new Date(),
       });
 
-      // Create bulk job record
+      // Create bulk job record (no individual email rows — upstream handles processing)
       await tx.insert(bulkJob).values({
         id: jobId,
         userId,
@@ -156,42 +165,46 @@ export async function createBulkJob(
         resultExpiresAt,
       });
 
-      // Insert all emails as verification results (pending state)
-      const verificationRecords = emails.map((email) => ({
-        id: generateId(),
-        jobId,
-        email,
-        status: 'pending',
-        deliverable: false,
-        risky: false,
-        unknown: true,
-        riskScore: 0,
-        isFreeEmail: false,
-        isRoleBased: false,
-        isCatchAll: false,
-        isDisposable: false,
-        hasMxRecords: false,
-        createdAt: new Date(),
-      }));
-
-      // Insert in batches of 1000
-      const batchSize = 1000;
-      for (let i = 0; i < verificationRecords.length; i += batchSize) {
-        const batch = verificationRecords.slice(i, i + batchSize);
-        await tx.insert(bulkVerificationResult).values(batch);
-      }
-
       // Update Redis cache with new balance
       await redis.set(`credit:balance:${userId}`, newBalance.toString());
     });
 
-    // Enqueue the job for processing (outside transaction - job record already committed)
+    // Upload file to upstream /verify/file API
+    let upstreamJobId: string;
+    try {
+      const uploadResult = await uploadFileToUpstream(filePath, filename);
+      upstreamJobId = uploadResult.task_id;
+
+      // Store upstream task_id in our job record
+      await db
+        .update(bulkJob)
+        .set({ upstreamJobId })
+        .where(eq(bulkJob.id, jobId));
+
+      logger.info(
+        { jobId, upstreamJobId, totalCount },
+        'File uploaded to upstream, job created'
+      );
+    } catch (uploadError: any) {
+      // Upload failed — mark job as failed
+      logger.error(
+        { jobId, error: uploadError.message },
+        'Failed to upload file to upstream, marking job as failed'
+      );
+      await updateBulkJobStatus(jobId, JobStatus.FAILED, {
+        completedAt: new Date(),
+      });
+      throw new Error(`Failed to upload file for verification: ${uploadError.message}`);
+    }
+
+    // Enqueue the worker job to poll upstream for progress
     await bulkVerificationQueue.add(
       'process-bulk-job',
       {
         jobId,
         userId,
         totalCount,
+        upstreamJobId,
       },
       {
         priority: 5,

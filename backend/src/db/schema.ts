@@ -200,6 +200,7 @@ export const bulkJob = pgTable(
     completedAt: timestamp('completed_at'),
     resultExpiresAt: timestamp('result_expires_at'),
     resultUrl: text('result_url'),
+    upstreamJobId: text('upstream_job_id'), // Task ID from upstream /verify/file API
   },
   (table) => ({
     userIdIdx: index('bulk_job_user_id_idx').on(table.userId),
