@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 EmailKit is a multi-tenant email verification SaaS platform. It proxies a **single upstream API key** to 1000+ users, managing fair queuing, credit accounting, and resilience. This is based on an existing EmailVerify platform but is **not a 1:1 replica** — modifications and improvements may be made.
 
-**Current status**: Specification phase only. Architecture and UI specs are complete. No source code, build system, tests, or lint configuration exists yet.
+**Current status**: Backend implementation in progress. Features 001–005 are implemented. Frontend exists in a separate repo. Smoke tests (22 tests across 6 files) are in place.
 
 ## Repository Layout
 
@@ -24,26 +24,51 @@ EmailKit is a multi-tenant email verification SaaS platform. It proxies a **sing
 - `docs/pages/*.md` — 11 UI page specifications (landing, dashboard, quick-verify, bulk-verify, api-keys, usage, billing, profile, history, auth, api-reference)
 - `docs/AUDIT-FINDINGS.md` — UI/UX audit with ASCII diagrams
 - `docs/figma/` — Figma design specs (60 pages across 8 sections, each with `spec.md` and `screenshots/`). Start from `docs/figma/index.md`
-- `specs/` — Feature specifications (currently only `001-user-auth/spec.md` placeholder)
+- `specs/` — Feature specifications (001-user-auth through 006-active-verification, all have spec.md)
+- `backend/` — Express + TypeScript backend (see Backend Structure below)
 - `.specify/` — Spec-driven development framework (templates in `.specify/templates/`, helper scripts in `.specify/scripts/bash/`)
-- `.specify/memory/constitution.md` — Project constitution template (not yet filled in — principles listed in this file under "Constitution" are from `docs/architecture.md`)
+- `.specify/memory/constitution.md` — Project constitution template
 - `_bmad/` — BMAD product management/development methodology framework (gitignored)
 
-## Planned Technology Stack
+## Backend Structure
+
+```
+backend/src/
+├── app.ts / server.ts          — Express app setup & entry point
+├── config/                     — env, database, redis, stripe, logger (Pino), swagger
+├── middleware/                  — auth, api-key-auth, rate-limit, idempotency, csrf, sse, error-handler, validate
+├── routes/                     — health, profile, user, verification, billing, bulk, webhooks
+│   ├── api-v1/                 — Public API: verify, credits, webhooks, health
+│   └── dashboard/              — API keys, usage, webhooks management
+├── services/                   — 26 service files (verification, bulk, upstream-client, credit, billing, stripe, subscription, queue, circuit-breaker, webhook, api-key, user, etc.)
+├── workers/                    — 9 workers (verification, bulk, reconciliation, subscription-renewal, api-key-cleanup, api-key-expiry, retention-cleanup, result-expiry-notify, dlq-handler)
+├── db/                         — Drizzle ORM schema + connection pool
+├── types/                      — TypeScript type definitions
+├── models/                     — Data models (user, session, credit-event, billing-info, verification-code)
+├── lib/                        — Utilities (auth/Better Auth, crypto, errors, hmac, metrics/Prometheus, schemas/Zod, serializers)
+└── mock-upstream-api.ts        — Mock upstream API for testing
+```
+
+## Technology Stack
 
 | Component | Technology |
 |-----------|-----------|
-| Frontend | Next.js + TypeScript |
-| Backend | Node.js + TypeScript + Express/Fastify |
-| Database | PostgreSQL 16+ |
-| Queue | BullMQ Pro (Redis 7+, dedicated instance) |
+| Frontend | Next.js 15+ (App Router) + React 19+ + TypeScript + Tailwind CSS |
+| Backend | Node.js 20+ + TypeScript 5.7 + Express 4.21 |
+| Database | PostgreSQL 16+ (Drizzle ORM 0.45) |
+| Queue | BullMQ 5.67 (Redis 7+) |
 | Rate Limiting | Redis Lua scripts (sliding window) |
-| Circuit Breaker | opossum |
-| HTTP Client | undici (connection pooling) |
-| Auth | Google OAuth 2.0 |
-| Payments | TBD (Stripe or Razorpay — abstracted via PaymentProvider interface) |
+| Circuit Breaker | Opossum 9.0 |
+| HTTP Client | Undici 7.19 (connection pooling) |
+| Auth | Better Auth 1.4 (OAuth/session) |
+| Payments | Stripe SDK 20.x (PaymentProvider abstraction for future gateways) |
 | Real-time | Server-Sent Events (SSE) |
-| Monitoring | Prometheus + Grafana |
+| Monitoring | Prometheus (prom-client 15.1) + OpenTelemetry |
+| Logging | Pino 10.3 |
+| Validation | Zod 3.24 |
+| Testing | Vitest 2.1 + Supertest 7.0 |
+| File Parsing | csv-parse, csv-stringify, xlsx |
+| Storage | AWS S3 SDK (DigitalOcean Spaces) |
 
 ## Architecture (5-Layer Defense)
 
@@ -137,15 +162,34 @@ Before release: load test at 10x peak, staging verification with real emails, ro
 | `/auth/sign-up` | Sign up |
 | `/auth/password-reset` | Password reset |
 
-## Active Technologies
-- TypeScript 5.x (Node.js 20+ for backend, Next.js 15+ for frontend) (001-user-auth)
-- PostgreSQL 16+ (users, sessions, credit_events tables), Redis 7+ (rate limiting, credit cache), DigitalOcean Spaces (avatars) (001-user-auth)
-- TypeScript 5.x (Node.js 20+ backend, Next.js 15+ frontend) (002-verification-engine)
-- Stripe SDK 20.x (payment processing, subscriptions, webhooks) (003-billing)
-- TypeScript 5.x (Node.js 20+) + Express, Drizzle ORM, BullMQ Pro, Redis 7+, Better Auth (005-api-webhooks)
-- PostgreSQL 16+ (api_keys, webhooks, webhook_deliveries), Redis (rate limiting, idempotency cache) (005-api-webhooks)
-- TypeScript 5.x, Next.js 15+ (App Router), React 19+ + Next.js, React, Tailwind CSS (assumed from Figma design system), Radix UI or similar headless primitives for modal (006-active-verification)
-- N/A (no backend or database work) (006-active-verification)
+## Implemented Features
 
-## Recent Changes
-- 005-api-webhooks: Added TypeScript 5.x (Node.js 20+) + Express, Drizzle ORM, BullMQ Pro, Redis 7+, Better Auth
+| Feature | Status | Key Components |
+|---------|--------|----------------|
+| 001-user-auth | Implemented | Better Auth, Google OAuth, sessions, profile, avatar upload |
+| 002-verification-engine | Implemented | Single email verify, upstream proxy, circuit breaker, queue workers |
+| 003-billing | Implemented | Stripe checkout (one-time + subscriptions), webhooks, credit system |
+| 004-bulk-verification | Implemented | CSV/JSON upload, bulk workers, job tracking, result storage |
+| 005-api-webhooks | Implemented | Public API v1, API key management, webhook delivery system |
+| 006-active-verification | Spec only | Frontend-only feature (no backend work) |
+
+## NPM Scripts (backend/)
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Development server (tsx watch) |
+| `npm run build` | Compile TypeScript |
+| `npm run workers` | Verification job processor |
+| `npm run workers:bulk` | Bulk job processor |
+| `npm run workers:reconcile` | Credit reconciliation (5min) |
+| `npm run mock:upstream` | Mock upstream API server |
+| `npm run db:generate` | Generate migrations from schema |
+| `npm run db:migrate` | Run pending migrations |
+| `npm run db:studio` | Open Drizzle Studio |
+| `npm test` | Run all tests |
+
+## Current Branch Work
+
+Branch `update-ui-backend` — Adding upstream job ID tracking to bulk verification:
+- New migration: `0004_add_upstream_job_id.sql`
+- Modified: schema, billing routes, bulk-verification service, upstream-client, bulk types, bulk-worker
